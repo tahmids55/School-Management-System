@@ -16,7 +16,8 @@ export interface CurrentUser {
 export interface TokenResponse {
   accessToken: string;
   tokenType: string;
-  expiresInSeconds: number;
+  /** Access-token lifetime in seconds (field name as sent by the backend's TokenResponse). */
+  expiresIn: number;
   user: CurrentUser;
 }
 
