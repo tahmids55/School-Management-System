@@ -1,0 +1,47 @@
+databases:
+  - name: school-db
+    plan: free
+    databaseName: school
+    user: school_user
+
+services:
+  - type: web
+    name: school-management
+    runtime: docker
+    plan: free
+    branch: main
+    autoDeploy: false
+    healthCheckPath: /actuator/health/readiness
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DB_HOST
+        fromDatabase:
+          name: school-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: school-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: school-db
+          property: database
+      - key: DB_USERNAME
+        fromDatabase:
+          name: school-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: school-db
+          property: password
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DEMO_PASSWORD
+        sync: false
+      - key: SEED_DEMO_DATA
+        value: "true"
+      - key: COOKIE_SECURE
+        value: "true"
