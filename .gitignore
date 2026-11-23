@@ -29,3 +29,24 @@ bin/
 ### Mac OS ###
 .DS_Store
 /project-status
+
+### Maven ###
+target/
+
+### IntelliJ IDEA ###
+.idea/
+*.iml
+*.iws
+*.ipr
+
+### Environment & Logs ###
+.env
+.env.*
+!.env.example
+logs/
+*.log
+
+### Frontend & Static Build ###
+frontend/node_modules/
+src/main/resources/static/
+project-status/
