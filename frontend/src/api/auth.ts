@@ -1,0 +1,48 @@
+import { api, refreshAccessToken } from './client';
+
+export type Role = 'ADMIN' | 'TEACHER' | 'STUDENT';
+
+export interface CurrentUser {
+  id: number;
+  username: string;
+  fullName: string;
+  email: string;
+  role: Role;
+  mustChangePassword: boolean;
+  studentId?: number | null;
+  teacherId?: number | null;
+}
+
+export interface TokenResponse {
+  accessToken: string;
+  tokenType: string;
+  expiresInSeconds: number;
+  user: CurrentUser;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+/** POST /auth/login (F04). */
+export async function login(request: LoginRequest): Promise<TokenResponse> {
+  const { data } = await api.post<TokenResponse>('/auth/login', request);
+  return data;
+}
+
+/** POST /auth/refresh (F09). Uses the HttpOnly cookie; shares one request with the client interceptor. */
+export function refresh(): Promise<TokenResponse> {
+  return refreshAccessToken<TokenResponse>();
+}
+
+/** POST /auth/logout (F09). Clears the refresh cookie on the server. */
+export async function logout(): Promise<void> {
+  await api.post('/auth/logout');
+}
+
+/** GET /auth/me (F04). */
+export async function me(): Promise<CurrentUser> {
+  const { data } = await api.get<CurrentUser>('/auth/me');
+  return data;
+}
