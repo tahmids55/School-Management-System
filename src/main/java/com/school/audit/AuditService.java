@@ -1,0 +1,53 @@
+package com.school.audit;
+
+import com.school.common.SecurityUtils;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Clock;
+
+/**
+ * Records audit entries inside the caller's transaction.
+ */
+@Service
+public class AuditService {
+
+    public static final int MAX_ACTOR_LENGTH = 50;
+    public static final int MAX_FIELD_LENGTH = 50;
+    public static final int MAX_DETAILS_LENGTH = 1000;
+
+    private final AuditLogRepository auditLogRepository;
+    private final Clock clock;
+
+    public AuditService(AuditLogRepository auditLogRepository, Clock clock) {
+        this.auditLogRepository = auditLogRepository;
+        this.clock = clock;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void record(String action, String entityType, String entityId, String details) {
+        recordAs(SecurityUtils.currentUsernameOrSystem(), action, entityType, entityId, details);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void recordAs(String actor, String action, String entityType, String entityId, String details) {
+        String normalizedActor = (actor == null || actor.isBlank()) ? SecurityUtils.SYSTEM_ACTOR : actor;
+        AuditLog entry = new AuditLog(
+                truncate(normalizedActor, MAX_ACTOR_LENGTH),
+                truncate(action, MAX_FIELD_LENGTH),
+                truncate(entityType, MAX_FIELD_LENGTH),
+                truncate(entityId, MAX_FIELD_LENGTH),
+                truncate(details, MAX_DETAILS_LENGTH),
+                clock.instant()
+        );
+        auditLogRepository.save(entry);
+    }
+
+    private static String truncate(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() > maxLength ? value.substring(0, maxLength) : value;
+    }
+}
