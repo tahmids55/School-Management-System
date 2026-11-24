@@ -50,4 +50,10 @@ public final class AuthDtos {
             return new TokenResponse(accessToken, "Bearer", expiresIn, user);
         }
     }
+
+    public record AuthSession(
+            TokenResponse tokenResponse,
+            String refreshToken
+    ) {
+    }
 }
