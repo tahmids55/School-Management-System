@@ -21,10 +21,16 @@ public class AcademicYearService {
     static final String ENTITY_TYPE = "AcademicYear";
 
     private final AcademicYearRepository academicYearRepository;
+    private final SchoolClassRepository schoolClassRepository;
     private final AuditService auditService;
 
-    public AcademicYearService(AcademicYearRepository academicYearRepository, AuditService auditService) {
+    public AcademicYearService(
+            AcademicYearRepository academicYearRepository,
+            SchoolClassRepository schoolClassRepository,
+            AuditService auditService
+    ) {
         this.academicYearRepository = academicYearRepository;
+        this.schoolClassRepository = schoolClassRepository;
         this.auditService = auditService;
     }
 
@@ -106,7 +112,7 @@ public class AcademicYearService {
         if (year.isCurrent()) {
             throw new ConflictException("The current academic year cannot be deleted");
         }
-        if (academicYearRepository.hasClassesOrExams(id)) {
+        if (schoolClassRepository.existsByAcademicYearId(id) || academicYearRepository.hasExams(id)) {
             throw new ConflictException("This academic year has classes or exams and cannot be deleted");
         }
         academicYearRepository.delete(year);

@@ -39,13 +39,16 @@ class AcademicYearServiceTest {
     private AcademicYearRepository repository;
 
     @Mock
+    private SchoolClassRepository classRepository;
+
+    @Mock
     private AuditService auditService;
 
     private AcademicYearService service;
 
     @BeforeEach
     void setUp() {
-        service = new AcademicYearService(repository, auditService);
+        service = new AcademicYearService(repository, classRepository, auditService);
     }
 
     private static AcademicYear year(long id, String name, boolean current) {
@@ -210,9 +213,21 @@ class AcademicYearServiceTest {
     }
 
     @Test
-    void delete_yearWithClassesOrExams_is409() {
+    void delete_yearWithClasses_is409() {
         when(repository.findById(2L)).thenReturn(Optional.of(year(2, "2025", false)));
-        when(repository.hasClassesOrExams(2L)).thenReturn(true);
+        when(classRepository.existsByAcademicYearId(2L)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.delete(2L))
+                .isInstanceOf(ConflictException.class)
+                .hasMessage("This academic year has classes or exams and cannot be deleted");
+        verify(repository, never()).delete(any());
+    }
+
+    @Test
+    void delete_yearWithExams_is409() {
+        when(repository.findById(2L)).thenReturn(Optional.of(year(2, "2025", false)));
+        when(classRepository.existsByAcademicYearId(2L)).thenReturn(false);
+        when(repository.hasExams(2L)).thenReturn(true);
 
         assertThatThrownBy(() -> service.delete(2L))
                 .isInstanceOf(ConflictException.class)
@@ -224,7 +239,8 @@ class AcademicYearServiceTest {
     void delete_unusedOldYear_isDeleted() {
         AcademicYear old = year(2, "2025", false);
         when(repository.findById(2L)).thenReturn(Optional.of(old));
-        when(repository.hasClassesOrExams(2L)).thenReturn(false);
+        when(classRepository.existsByAcademicYearId(2L)).thenReturn(false);
+        when(repository.hasExams(2L)).thenReturn(false);
 
         service.delete(2L);
 
