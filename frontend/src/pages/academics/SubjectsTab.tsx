@@ -2,17 +2,17 @@ import { useState } from 'react';
 import { Alert, Button, Card, Empty, Form, Input, InputNumber, Modal, Popconfirm, Space, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   academicKeys,
   createSubject,
   deleteSubject,
-  listSubjects,
   updateSubject,
   type Subject,
   type SubjectRequest,
 } from '../../api/academics';
 import { errorMessage, fieldErrors } from '../../api/client';
+import { useSubjects } from '../../hooks/useSubjects';
 import { feedback } from '../../utils/feedback';
 
 /** Subjects tab: table ordered by code, create/edit modal, delete confirmation. */
@@ -22,7 +22,7 @@ export default function SubjectsTab() {
   // undefined = modal closed, null = creating, a subject = editing that subject
   const [editing, setEditing] = useState<Subject | null | undefined>(undefined);
 
-  const subjects = useQuery({ queryKey: academicKeys.subjects, queryFn: listSubjects });
+  const subjects = useSubjects();
 
   const save = useMutation({
     mutationFn: (values: SubjectRequest) => (editing ? updateSubject(editing.id, values) : createSubject(values)),

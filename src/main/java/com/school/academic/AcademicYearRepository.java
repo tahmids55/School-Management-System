@@ -30,8 +30,7 @@ public interface AcademicYearRepository extends JpaRepository<AcademicYear, Long
     @Query("update AcademicYear y set y.current = false, y.version = y.version + 1 where y.current = true")
     int clearCurrent();
 
-    /** Native SQL, so this feature does not depend on the class (F08) and exam (F23) entities. */
-    @Query(value = "SELECT EXISTS (SELECT 1 FROM school_classes WHERE academic_year_id = :id)"
-            + " OR EXISTS (SELECT 1 FROM exams WHERE academic_year_id = :id)", nativeQuery = true)
-    boolean hasClassesOrExams(@Param("id") Long id);
+    /** Native SQL, so this feature does not depend on the exam entity (F23). Classes: SchoolClassRepository. */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM exams WHERE academic_year_id = :id)", nativeQuery = true)
+    boolean hasExams(@Param("id") Long id);
 }

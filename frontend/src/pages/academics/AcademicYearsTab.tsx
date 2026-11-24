@@ -2,19 +2,20 @@ import { useState } from 'react';
 import { Alert, Button, Card, DatePicker, Empty, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 import {
   academicKeys,
   activateAcademicYear,
   createAcademicYear,
   deleteAcademicYear,
-  listAcademicYears,
   updateAcademicYear,
   type AcademicYear,
   type AcademicYearRequest,
 } from '../../api/academics';
+import { classKeys } from '../../api/classes';
 import { errorMessage } from '../../api/client';
+import { useYears } from '../../hooks/useYears';
 import { feedback } from '../../utils/feedback';
 import { formatDate, toIsoDate } from '../../utils/format';
 
@@ -32,10 +33,15 @@ export default function AcademicYearsTab() {
   // undefined = modal closed, null = creating, a year = editing that year
   const [editing, setEditing] = useState<AcademicYear | null | undefined>(undefined);
 
-  const years = useQuery({ queryKey: academicKeys.years, queryFn: listAcademicYears });
-  const currentYear = years.data?.find((year) => year.current);
+  const years = useYears();
+  const { currentYear } = years;
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: academicKeys.years });
+  // Class lists show the year's name and default to the current year, so refresh them too.
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: academicKeys.years }),
+      queryClient.invalidateQueries({ queryKey: classKeys.all }),
+    ]);
 
   const save = useMutation({
     mutationFn: (request: AcademicYearRequest) =>
