@@ -3,6 +3,7 @@ package com.school.auth;
 import com.school.user.AppUser;
 import com.school.user.Role;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public final class AuthDtos {
@@ -13,6 +14,17 @@ public final class AuthDtos {
     public record LoginRequest(
             @NotBlank @Size(max = 120) String username,
             @NotBlank @Size(max = 100) String password
+    ) {
+    }
+
+    public record ChangePasswordRequest(
+            @NotBlank String currentPassword,
+            @NotBlank
+            @Pattern(
+                    regexp = "^(?=.*[A-Za-z])(?=.*\\d).{8,100}$",
+                    message = "must be 8-100 characters and contain a letter and a digit"
+            )
+            String newPassword
     ) {
     }
 
@@ -49,5 +61,11 @@ public final class AuthDtos {
         public static TokenResponse from(String accessToken, long expiresIn, CurrentUser user) {
             return new TokenResponse(accessToken, "Bearer", expiresIn, user);
         }
+    }
+
+    public record AuthSession(
+            TokenResponse tokenResponse,
+            String refreshToken
+    ) {
     }
 }

@@ -26,10 +26,20 @@ export interface LoginRequest {
   password: string;
 }
 
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
 /** POST /auth/login (F04). */
 export async function login(request: LoginRequest): Promise<TokenResponse> {
   const { data } = await api.post<TokenResponse>('/auth/login', request);
   return data;
+}
+
+/** POST /auth/change-password (F10). Ends all sessions on success. */
+export async function changePassword(request: ChangePasswordRequest): Promise<void> {
+  await api.post('/auth/change-password', request);
 }
 
 /** POST /auth/refresh (F09). Uses the HttpOnly cookie; shares one request with the client interceptor. */
