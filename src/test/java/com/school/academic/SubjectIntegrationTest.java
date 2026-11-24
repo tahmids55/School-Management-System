@@ -1,6 +1,8 @@
 package com.school.academic;
 
 import com.school.IntegrationTestBase;
+import com.school.user.AppUserRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -11,6 +13,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import java.util.Map;
 
 import static com.school.academic.AcademicYearIntegrationTest.as;
+import static com.school.academic.AcademicYearIntegrationTest.seedTestUsers;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -26,6 +29,14 @@ class SubjectIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private AppUserRepository appUserRepository;
+
+    @BeforeEach
+    void setUpUsers() {
+        seedTestUsers(appUserRepository);
+    }
 
     private String body(String code, String name, Object fullMarks, Object passMarks) throws Exception {
         return objectMapper.writeValueAsString(Map.of(

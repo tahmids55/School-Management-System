@@ -2,10 +2,12 @@ package com.school.academic;
 
 import com.school.IntegrationTestBase;
 import com.school.audit.AuditLogRepository;
+import com.school.user.AppUserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -17,6 +19,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static com.school.academic.AcademicYearIntegrationTest.as;
+import static com.school.academic.AcademicYearIntegrationTest.seedTestUsers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -42,6 +45,14 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private EntityManagerFactory entityManagerFactory;
+
+    @Autowired
+    private AppUserRepository appUserRepository;
+
+    @BeforeEach
+    void setUpUsers() {
+        seedTestUsers(appUserRepository);
+    }
 
     /** Creates a year through the API; the first one becomes current. */
     private long year(String name) throws Exception {
@@ -175,7 +186,8 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
         }
         long manyClasses = countQueriesOfList(yearId);
 
-        assertThat(manyClasses).isEqualTo(fewClasses).isLessThanOrEqualTo(3);
+        // 1 AccountStateFilter user reload + 3 class-list queries (year, classes, student counts)
+        assertThat(manyClasses).isEqualTo(fewClasses).isLessThanOrEqualTo(4);
     }
 
     private long countQueriesOfList(long yearId) throws Exception {

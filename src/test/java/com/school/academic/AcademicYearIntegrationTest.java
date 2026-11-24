@@ -2,6 +2,10 @@ package com.school.academic;
 
 import com.school.IntegrationTestBase;
 import com.school.audit.AuditLogRepository;
+import com.school.user.AppUser;
+import com.school.user.AppUserRepository;
+import com.school.user.Role;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -33,6 +37,27 @@ class AcademicYearIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private AuditLogRepository auditLogRepository;
+
+    @Autowired
+    private AppUserRepository appUserRepository;
+
+    @BeforeEach
+    void setUpUsers() {
+        seedTestUsers(appUserRepository);
+    }
+
+    static void seedTestUsers(AppUserRepository appUserRepository) {
+        for (Role role : Role.values()) {
+            String username = role.name().toLowerCase();
+            appUserRepository.save(new AppUser(
+                    username,
+                    username + "@school.edu",
+                    "$2a$12$testHashPlaceholder",
+                    role.name() + " User",
+                    role
+            ));
+        }
+    }
 
     static RequestPostProcessor as(String role) {
         return jwt().jwt(token -> token.subject(role.toLowerCase())).authorities(new SimpleGrantedAuthority("ROLE_" + role));
