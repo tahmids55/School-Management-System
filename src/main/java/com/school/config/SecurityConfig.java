@@ -35,6 +35,8 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
+import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
@@ -104,6 +106,7 @@ public class SecurityConfig {
                         .accessDeniedHandler(deniedHandler)
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2
+                        .bearerTokenResolver(bearerTokenResolver())
                         .authenticationEntryPoint(entryPoint)
                         .accessDeniedHandler(deniedHandler)
                         .jwt(jwt -> jwt
@@ -168,6 +171,25 @@ public class SecurityConfig {
     @ConditionalOnMissingBean(TeachingScope.class)
     public TeachingScope emptyTeachingScope() {
         return teacherUsername -> Set.of();
+    }
+
+    private static final Set<String> PUBLIC_AUTH_POST_PATHS = Set.of(
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout"
+    );
+
+    private static BearerTokenResolver bearerTokenResolver() {
+        DefaultBearerTokenResolver delegate = new DefaultBearerTokenResolver();
+        return request -> {
+            if (HttpMethod.POST.matches(request.getMethod())) {
+                String path = request.getRequestURI().substring(request.getContextPath().length());
+                if (PUBLIC_AUTH_POST_PATHS.contains(path)) {
+                    return null;
+                }
+            }
+            return delegate.resolve(request);
+        };
     }
 
     private static SecretKey hmacKey(SecurityProperties securityProperties) {
