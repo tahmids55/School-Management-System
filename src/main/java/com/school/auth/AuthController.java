@@ -1,6 +1,7 @@
 package com.school.auth;
 
 import com.school.auth.AuthDtos.AuthSession;
+import com.school.auth.AuthDtos.ChangePasswordRequest;
 import com.school.auth.AuthDtos.CurrentUser;
 import com.school.auth.AuthDtos.LoginRequest;
 import com.school.auth.AuthDtos.TokenResponse;
@@ -56,6 +57,16 @@ public class AuthController {
             @CookieValue(name = REFRESH_COOKIE_NAME, required = false) String refreshToken
     ) {
         authService.logout(refreshToken);
+        ResponseCookie cleared = buildRefreshCookie("", Duration.ZERO);
+        return ResponseEntity.noContent()
+                .header(HttpHeaders.SET_COOKIE, cleared.toString())
+                .build();
+    }
+
+    @PreAuthorize("isAuthenticated()")
+    @PostMapping("/change-password")
+    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        authService.changePassword(request);
         ResponseCookie cleared = buildRefreshCookie("", Duration.ZERO);
         return ResponseEntity.noContent()
                 .header(HttpHeaders.SET_COOKIE, cleared.toString())

@@ -12,6 +12,9 @@ import com.school.security.TeachingScope;
 import com.school.user.AppUser;
 import com.school.user.AppUserRepository;
 import com.school.user.Role;
+import com.school.user.UserDtos.TemporaryPasswordResponse;
+import com.school.user.UserService;
+import com.school.user.UserService.NewAccount;
 import jakarta.persistence.EntityManager;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,6 +85,9 @@ class AuthIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private TeachingScope teachingScope;
+
+    @Autowired
+    private UserService userService;
 
     @Autowired
     private Clock clock;
@@ -550,6 +556,233 @@ class AuthIntegrationTest extends IntegrationTestBase {
         AppUser unlocked = appUserRepository.findByUsernameIgnoreCase("t-1001").orElseThrow();
         assertThat(unlocked.getFailedLoginAttempts()).isZero();
         assertThat(unlocked.getLockedUntil()).isNull();
+    }
+
+    @Test
+    void changePassword_weakPassword_returns400WithFieldError() throws Exception {
+        String token = loginAndGetToken("t-1001", "TeacherPass#1");
+
+        for (String weak : List.of("Abc1234", "onlyletters", "12345678", "A1" + "b".repeat(99))) {
+            mockMvc.perform(post("/api/v1/auth/change-password")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of(
+                                    "currentPassword", "TeacherPass#1",
+                                    "newPassword", weak
+                            ))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.detail").value("Some fields are invalid"))
+                    .andExpect(jsonPath("$.errors.newPassword")
+                            .value("must be 8-100 characters and contain a letter and a digit"));
+        }
+    }
+
+    @Test
+    void changePassword_boundariesAndValidationRules_enforcedCorrectly() throws Exception {
+        // Unauthenticated is 401
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"TeacherPass#1\",\"newPassword\":\"Valid123\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+
+        String token = loginAndGetToken("t-1001", "TeacherPass#1");
+
+        // Wrong current password -> 422
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", "WrongPass1",
+                                "newPassword", "ValidPass1"
+                        ))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("Current password is incorrect"));
+
+        // Same as current -> 422
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", "TeacherPass#1",
+                                "newPassword", "TeacherPass#1"
+                        ))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("New password must be different from the current password"));
+
+        // Exact 8-char boundary succeeds (204)
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", "TeacherPass#1",
+                                "newPassword", "Abcdef12"
+                        ))))
+                .andExpect(status().isNoContent());
+
+        // Exact 72-char BCrypt limit boundary succeeds (204)
+        String maxValid = "A1" + "b".repeat(70);
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", "Abcdef12",
+                                "newPassword", maxValid
+                        ))))
+                .andExpect(status().isNoContent());
+
+        // ADMIN and STUDENT roles can also change their own passwords
+        String adminToken = loginAndGetToken("admin", "AdminPass#1");
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", "AdminPass#1",
+                                "newPassword", "AdminPass#2"
+                        ))))
+                .andExpect(status().isNoContent());
+
+        String studentToken = loginAndGetToken("adm-2026-001", "StudentPass#1");
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + studentToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", "StudentPass#1",
+                                "newPassword", "StudentPass#2"
+                        ))))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void changePassword_clearsMustChangeFlagRevokesAllCookiesAndAudits() throws Exception {
+        NewAccount created = userService.createAccount(
+                "T-2001",
+                "NEWTEACHER@SCHOOL.EDU",
+                "New Teacher",
+                Role.TEACHER
+        );
+        assertThat(created.user().getUsername()).isEqualTo("t-2001");
+        assertThat(created.user().getEmail()).isEqualTo("newteacher@school.edu");
+        assertThat(created.user().isMustChangePassword()).isTrue();
+        assertThat(created.temporaryPassword()).matches("^(?=.*[A-Za-z])(?=.*\\d).{12}$");
+
+        Cookie session1Cookie = loginAndGetRefreshCookie("t-2001", created.temporaryPassword());
+        MvcResult login2 = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "t-2001",
+                                "password", created.temporaryPassword()
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.mustChangePassword").value(true))
+                .andReturn();
+        String accessToken = objectMapper.readTree(login2.getResponse().getContentAsString()).get("accessToken").asText();
+        Cookie session2Cookie = login2.getResponse().getCookie("refresh_token");
+        assertThat(session2Cookie).isNotNull();
+
+        // While mustChangePassword is true: /auth/me works (200), normal endpoints return 403
+        mockMvc.perform(get("/api/v1/auth/me")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mustChangePassword").value(true));
+
+        mockMvc.perform(get("/api/v1/test-rbac/teacher")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("Change your temporary password first"));
+
+        // Change password -> 204 and clears refresh cookie
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + accessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "currentPassword", created.temporaryPassword(),
+                                "newPassword", "MyNewPass#99"
+                        ))))
+                .andExpect(status().isNoContent())
+                .andExpect(header().string(HttpHeaders.SET_COOKIE, allOf(
+                        containsString("refresh_token="),
+                        containsString("Max-Age=0")
+                )));
+
+        // Both old refresh cookies fail immediately
+        mockMvc.perform(post("/api/v1/auth/refresh").cookie(session1Cookie))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail").value("Session expired. Please log in again."));
+        mockMvc.perform(post("/api/v1/auth/refresh").cookie(session2Cookie))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail").value("Session expired. Please log in again."));
+
+        // Normal endpoint works now
+        mockMvc.perform(get("/api/v1/test-rbac/teacher")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk());
+
+        assertThat(auditLogRepository.findAll())
+                .anySatisfy(entry -> assertThat(entry.getAction()).isEqualTo("ACCOUNT_CREATED"))
+                .anySatisfy(entry -> assertThat(entry.getAction()).isEqualTo("PASSWORD_CHANGED"));
+    }
+
+    @Test
+    void resetPassword_revokesOldCookiesImmediatelyAndSetsMustChangePassword() throws Exception {
+        Cookie cookieBeforeReset = loginAndGetRefreshCookie("adm-2026-001", "StudentPass#1");
+
+        TemporaryPasswordResponse reset = userService.resetPassword(student.getId());
+        assertThat(reset.username()).isEqualTo("adm-2026-001");
+        assertThat(reset.temporaryPassword()).hasSize(12);
+
+        // Old cookie fails straight after reset
+        mockMvc.perform(post("/api/v1/auth/refresh").cookie(cookieBeforeReset))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.detail").value("Session expired. Please log in again."));
+
+        // Login with temporary password triggers mustChangePassword=true and 403 on normal endpoint
+        String tempToken = loginAndGetToken("adm-2026-001", reset.temporaryPassword());
+        mockMvc.perform(get("/api/v1/test-rbac/student")
+                        .header("Authorization", "Bearer " + tempToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("Change your temporary password first"));
+
+        assertThat(auditLogRepository.findAll())
+                .anySatisfy(entry -> assertThat(entry.getAction()).isEqualTo("PASSWORD_RESET"));
+    }
+
+    @Test
+    void disableAndDeletedUser_existingAccessTokenGets401OnNormalEndpoints() throws Exception {
+        Cookie cookie = loginAndGetRefreshCookie("adm-2026-001", "StudentPass#1");
+        String token = loginAndGetToken("adm-2026-001", "StudentPass#1");
+
+        mockMvc.perform(get("/api/v1/test-rbac/student")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+
+        userService.disable(student);
+
+        mockMvc.perform(get("/api/v1/test-rbac/student")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("This account is disabled. Contact the administrator."));
+
+        mockMvc.perform(post("/api/v1/auth/refresh").cookie(cookie))
+                .andExpect(status().isUnauthorized());
+
+        // Also test deleted user whose JWT is still syntactically valid
+        String teacherToken = loginAndGetToken("t-1001", "TeacherPass#1");
+        AppUser freshTeacher = appUserRepository.findById(teacher.getId()).orElseThrow();
+        refreshTokenService.revokeAllForUser(freshTeacher);
+        appUserRepository.delete(freshTeacher);
+        entityManager.flush();
+
+        mockMvc.perform(get("/api/v1/test-rbac/teacher")
+                        .header("Authorization", "Bearer " + teacherToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("Session expired. Please log in again."));
     }
 
     private Cookie loginAndGetRefreshCookie(String username, String password) throws Exception {

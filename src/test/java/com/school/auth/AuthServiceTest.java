@@ -2,10 +2,12 @@ package com.school.auth;
 
 import com.school.audit.AuditService;
 import com.school.auth.AuthDtos.AuthSession;
+import com.school.auth.AuthDtos.ChangePasswordRequest;
 import com.school.auth.AuthDtos.CurrentUser;
 import com.school.auth.AuthDtos.LoginRequest;
 import com.school.auth.AuthDtos.TokenResponse;
 import com.school.common.exception.AuthenticationFailedException;
+import com.school.common.exception.BusinessRuleException;
 import com.school.security.JwtService;
 import com.school.security.ProfileLookup;
 import com.school.security.SecurityProperties;
@@ -328,6 +330,70 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.currentUser())
                 .isInstanceOf(AuthenticationFailedException.class)
                 .hasMessage("This account is disabled. Contact the administrator.");
+    }
+
+    @Test
+    void changePassword_wrongCurrentPassword_isRejected() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("t-1001", "n/a", List.of())
+        );
+        AppUser teacher = user(13L, "t-1001", "ayesha@school.edu", "$2a$12$oldhash", "Ayesha Rahman", Role.TEACHER);
+        when(appUserRepository.findByUsernameIgnoreCase("t-1001")).thenReturn(Optional.of(teacher));
+        when(passwordEncoder.matches("WrongPass1", "$2a$12$oldhash")).thenReturn(false);
+
+        assertThatThrownBy(() -> authService.changePassword(new ChangePasswordRequest("WrongPass1", "NewPass123")))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessage("Current password is incorrect");
+
+        verify(appUserRepository, never()).save(any());
+        verify(refreshTokenService, never()).revokeAllForUser(any());
+    }
+
+    @Test
+    void changePassword_sameAsCurrentPassword_isRejected() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("t-1001", "n/a", List.of())
+        );
+        AppUser teacher = user(14L, "t-1001", "ayesha@school.edu", "$2a$12$oldhash", "Ayesha Rahman", Role.TEACHER);
+        when(appUserRepository.findByUsernameIgnoreCase("t-1001")).thenReturn(Optional.of(teacher));
+        when(passwordEncoder.matches("SamePass1", "$2a$12$oldhash")).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.changePassword(new ChangePasswordRequest("SamePass1", "SamePass1")))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessage("New password must be different from the current password");
+
+        verify(appUserRepository, never()).save(any());
+        verify(refreshTokenService, never()).revokeAllForUser(any());
+    }
+
+    @Test
+    void changePassword_success_clearsFlagAndLogsOutOtherDevices() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("t-1001", "n/a", List.of())
+        );
+        AppUser teacher = user(15L, "t-1001", "ayesha@school.edu", "$2a$12$oldhash", "Ayesha Rahman", Role.TEACHER);
+        teacher.setMustChangePassword(true);
+        when(appUserRepository.findByUsernameIgnoreCase("t-1001")).thenReturn(Optional.of(teacher));
+        when(passwordEncoder.matches("TempPass123", "$2a$12$oldhash")).thenReturn(true);
+        when(passwordEncoder.matches("NewPass123", "$2a$12$oldhash")).thenReturn(false);
+        when(passwordEncoder.encode("NewPass123")).thenReturn("$2a$12$newhash");
+
+        authService.changePassword(new ChangePasswordRequest("TempPass123", "NewPass123"));
+
+        assertThat(teacher.getPasswordHash()).isEqualTo("$2a$12$newhash");
+        assertThat(teacher.isMustChangePassword()).isFalse();
+        verify(appUserRepository).save(teacher);
+        verify(refreshTokenService).revokeAllForUser(teacher);
+        verify(auditService).recordAs("t-1001", "PASSWORD_CHANGED", "AppUser", "15", "Password changed");
+    }
+
+    @Test
+    void changePassword_unauthenticated_throwsAuthenticationFailed() {
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> authService.changePassword(new ChangePasswordRequest("OldPass1", "NewPass123")))
+                .isInstanceOf(AuthenticationFailedException.class)
+                .hasMessage("Session expired. Please log in again.");
     }
 
     private static AppUser user(

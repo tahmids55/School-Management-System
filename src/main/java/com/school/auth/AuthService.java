@@ -2,11 +2,13 @@ package com.school.auth;
 
 import com.school.audit.AuditService;
 import com.school.auth.AuthDtos.AuthSession;
+import com.school.auth.AuthDtos.ChangePasswordRequest;
 import com.school.auth.AuthDtos.CurrentUser;
 import com.school.auth.AuthDtos.LoginRequest;
 import com.school.auth.AuthDtos.TokenResponse;
 import com.school.common.SecurityUtils;
 import com.school.common.exception.AuthenticationFailedException;
+import com.school.common.exception.BusinessRuleException;
 import com.school.security.JwtService;
 import com.school.security.ProfileLookup;
 import com.school.security.SecurityProperties;
@@ -37,6 +39,10 @@ public class AuthService {
     public static final String AUDIT_LOGIN_SUCCESS = "LOGIN_SUCCESS";
     public static final String AUDIT_LOGIN_FAILED = "LOGIN_FAILED";
     public static final String AUDIT_LOGOUT = "LOGOUT";
+    public static final String AUDIT_PASSWORD_CHANGED = "PASSWORD_CHANGED";
+
+    public static final String CURRENT_PASSWORD_INCORRECT_MESSAGE = "Current password is incorrect";
+    public static final String NEW_PASSWORD_SAME_MESSAGE = "New password must be different from the current password";
 
     private static final String FALLBACK_DUMMY_HASH =
             "$2a$12$7EqJtq98hPqEX7fNZaFWoOhi5L0v7sM5y8qY7wQ8xZ6a5b4c3d2e1";
@@ -147,6 +153,35 @@ public class AuthService {
             throw new AuthenticationFailedException(ACCOUNT_DISABLED_MESSAGE);
         }
         return toCurrentUser(user);
+    }
+
+    @Transactional
+    public void changePassword(ChangePasswordRequest request) {
+        String username = SecurityUtils.currentUsername()
+                .orElseThrow(() -> new AuthenticationFailedException(RefreshTokenService.SESSION_EXPIRED_MESSAGE));
+        AppUser user = appUserRepository.findByUsernameIgnoreCase(username)
+                .orElseThrow(() -> new AuthenticationFailedException(RefreshTokenService.SESSION_EXPIRED_MESSAGE));
+        if (!user.isEnabled()) {
+            throw new AuthenticationFailedException(ACCOUNT_DISABLED_MESSAGE);
+        }
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw new BusinessRuleException(CURRENT_PASSWORD_INCORRECT_MESSAGE);
+        }
+        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+            throw new BusinessRuleException(NEW_PASSWORD_SAME_MESSAGE);
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        user.setMustChangePassword(false);
+        appUserRepository.save(user);
+        refreshTokenService.revokeAllForUser(user);
+        auditService.recordAs(
+                user.getUsername(),
+                AUDIT_PASSWORD_CHANGED,
+                "AppUser",
+                entityId(user),
+                "Password changed"
+        );
     }
 
     private LoginOutcome completeLoginInTransaction(

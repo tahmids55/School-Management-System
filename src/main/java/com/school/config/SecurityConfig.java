@@ -2,19 +2,18 @@ package com.school.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
-import com.school.common.RequestIdFilter;
 import com.school.common.exception.GlobalExceptionHandler;
+import com.school.security.AccountStateFilter;
+import com.school.security.SecurityProblemWriter;
 import com.school.security.SecurityProperties;
 import com.school.security.TeachingScope;
-import jakarta.servlet.http.HttpServletResponse;
+import com.school.user.AppUserRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ProblemDetail;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -37,6 +36,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
 import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
@@ -44,7 +44,6 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
@@ -83,12 +82,24 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             JwtDecoder jwtDecoder,
-            JwtAuthenticationConverter jwtAuthenticationConverter
+            JwtAuthenticationConverter jwtAuthenticationConverter,
+            AppUserRepository appUserRepository
     ) throws Exception {
         AuthenticationEntryPoint entryPoint = (request, response, authException) ->
-                writeProblem(response, HttpStatus.UNAUTHORIZED, resolveAuthDetail(authException));
+                SecurityProblemWriter.write(
+                        objectMapper,
+                        response,
+                        HttpStatus.UNAUTHORIZED,
+                        resolveAuthDetail(authException)
+                );
         AccessDeniedHandler deniedHandler = (request, response, accessDeniedException) ->
-                writeProblem(response, HttpStatus.FORBIDDEN, GlobalExceptionHandler.ACCESS_DENIED_DETAIL);
+                SecurityProblemWriter.write(
+                        objectMapper,
+                        response,
+                        HttpStatus.FORBIDDEN,
+                        GlobalExceptionHandler.ACCESS_DENIED_DETAIL
+                );
+        AccountStateFilter accountStateFilter = new AccountStateFilter(appUserRepository, objectMapper);
 
         return http
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -113,6 +124,7 @@ public class SecurityConfig {
                                 .decoder(jwtDecoder)
                                 .jwtAuthenticationConverter(jwtAuthenticationConverter))
                 )
+                .addFilterAfter(accountStateFilter, BearerTokenAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
@@ -208,13 +220,5 @@ public class SecurityConfig {
             return SESSION_EXPIRED_DETAIL;
         }
         return GlobalExceptionHandler.AUTH_REQUIRED_DETAIL;
-    }
-
-    private void writeProblem(HttpServletResponse response, HttpStatus status, String detail) throws IOException {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
-        problem.setProperty("requestId", RequestIdFilter.currentRequestId());
-        response.setStatus(status.value());
-        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
-        objectMapper.writeValue(response.getOutputStream(), problem);
     }
 }
