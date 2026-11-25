@@ -104,7 +104,10 @@ public class SchoolClassService {
         return ClassResponse.from(schoolClassRepository.saveAndFlush(schoolClass), enrolled);
     }
 
-    /** A class with students cannot be deleted. Flushing turns any other foreign-key use into a 409. */
+    /**
+     * A class with active students cannot be deleted. Flushing turns any other foreign-key use
+     * (for example graduated students who keep it as history) into a 409.
+     */
     @Transactional
     public void delete(Long id) {
         SchoolClass schoolClass = findClass(id);
