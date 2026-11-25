@@ -18,9 +18,11 @@ import java.util.Locale;
 public class SubjectService {
 
     private final SubjectRepository subjectRepository;
+    private final ClassSubjectRepository classSubjectRepository;
 
-    public SubjectService(SubjectRepository subjectRepository) {
+    public SubjectService(SubjectRepository subjectRepository, ClassSubjectRepository classSubjectRepository) {
         this.subjectRepository = subjectRepository;
+        this.classSubjectRepository = classSubjectRepository;
     }
 
     @Transactional(readOnly = true)
@@ -62,12 +64,15 @@ public class SubjectService {
     }
 
     /**
-     * Flushing here makes a foreign-key violation (subject used by classes or marks) surface
-     * inside this call, so GlobalExceptionHandler answers 409 instead of a late commit error.
+     * Rejects deletion if the subject is assigned to any class; flushing turns any remaining
+     * foreign-key reference (e.g. marks) into a 409 instead of a late commit error.
      */
     @Transactional
     public void delete(Long id) {
         Subject subject = findOrThrow(id);
+        if (classSubjectRepository.existsBySubjectId(id)) {
+            throw new ConflictException("Subject " + subject.getCode() + " is assigned to classes and cannot be deleted");
+        }
         subjectRepository.delete(subject);
         subjectRepository.flush();
     }

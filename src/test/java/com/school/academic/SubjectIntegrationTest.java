@@ -211,6 +211,7 @@ class SubjectIntegrationTest extends IntegrationTestBase {
 
         mockMvc.perform(delete(URL + "/" + subjectId).with(as("ADMIN")))
                 .andExpect(status().isConflict())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("Subject PHY101 is assigned to classes and cannot be deleted"));
     }
 }

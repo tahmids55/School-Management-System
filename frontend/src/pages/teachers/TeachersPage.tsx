@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   DatePicker,
+  Drawer,
   Dropdown,
   Empty,
   Form,
@@ -12,7 +13,9 @@ import {
   Modal,
   Select,
   Space,
+  Spin,
   Table,
+  Tag,
   Typography,
 } from 'antd';
 import type { MenuProps } from 'antd';
@@ -22,11 +25,13 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { errorMessage, fieldErrors } from '../../api/client';
 import {
   createTeacher,
+  getTeacherTeachingLoad,
   listTeachers,
   teacherKeys,
   updateTeacher,
   updateTeacherStatus,
   type CreatedTeacherResponse,
+  type SubjectAssignment,
   type Teacher,
   type TeacherRequest,
   type TeacherStatus,
@@ -79,6 +84,7 @@ export default function TeachersPage() {
 
   // undefined = modal closed, null = creating, Teacher = editing that teacher
   const [editing, setEditing] = useState<Teacher | null | undefined>(undefined);
+  const [loadFor, setLoadFor] = useState<Teacher | undefined>(undefined);
   const [form] = Form.useForm<TeacherFormValues>();
 
   const queryParams = {
@@ -91,6 +97,12 @@ export default function TeachersPage() {
   const teachersQuery = useQuery({
     queryKey: teacherKeys.list(queryParams),
     queryFn: () => listTeachers(queryParams),
+  });
+
+  const teachingLoadQuery = useQuery({
+    queryKey: teacherKeys.teachingLoad(loadFor?.id ?? 0),
+    queryFn: () => getTeacherTeachingLoad(loadFor!.id),
+    enabled: loadFor !== undefined,
   });
 
   const refreshTeachers = () => queryClient.invalidateQueries({ queryKey: teacherKeys.all });
@@ -260,31 +272,46 @@ export default function TeachersPage() {
       width: 120,
       render: (status: TeacherStatus) => <StatusTag value={status} />,
     },
-  ];
-
-  if (isAdmin) {
-    columns.push({
+    {
       title: 'Actions',
       key: 'actions',
       align: 'right',
-      width: 170,
+      width: isAdmin ? 260 : 130,
       render: (_, teacher) => (
         <Space size={4} wrap>
-          <Button type="link" size="small" onClick={() => openEditModal(teacher)}>
-            Edit
+          <Button type="link" size="small" onClick={() => setLoadFor(teacher)}>
+            Teaching load
           </Button>
-          <Dropdown menu={{ items: statusMenuItems(teacher) }} trigger={['click']}>
-            <Button
-              size="small"
-              loading={statusMutation.isPending && statusMutation.variables?.id === teacher.id}
-            >
-              Actions <DownOutlined />
-            </Button>
-          </Dropdown>
+          {isAdmin && (
+            <>
+              <Button type="link" size="small" onClick={() => openEditModal(teacher)}>
+                Edit
+              </Button>
+              <Dropdown menu={{ items: statusMenuItems(teacher) }} trigger={['click']}>
+                <Button
+                  size="small"
+                  loading={statusMutation.isPending && statusMutation.variables?.id === teacher.id}
+                >
+                  Actions <DownOutlined />
+                </Button>
+              </Dropdown>
+            </>
+          )}
         </Space>
       ),
-    });
-  }
+    },
+  ];
+
+  const teachingLoadColumns: ColumnsType<SubjectAssignment> = [
+    { title: 'Code', dataIndex: 'subjectCode', key: 'subjectCode', width: 110, render: (v: string) => <Text strong>{v}</Text> },
+    { title: 'Subject', dataIndex: 'subjectName', key: 'subjectName' },
+    {
+      title: 'Class',
+      dataIndex: 'className',
+      key: 'className',
+      render: (name: string, row) => `${name} (${row.academicYear})`,
+    },
+  ];
 
   const rows = teachersQuery.data?.content ?? [];
   const total = teachersQuery.data?.totalElements ?? 0;
@@ -475,6 +502,59 @@ export default function TeachersPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Drawer
+        open={loadFor !== undefined}
+        onClose={() => setLoadFor(undefined)}
+        title={loadFor ? `Teaching load: ${loadFor.fullName}` : ''}
+        width="min(640px, 100vw)"
+        destroyOnHidden
+      >
+        {teachingLoadQuery.isLoading ? (
+          <div style={{ textAlign: 'center', padding: 32 }}>
+            <Spin />
+          </div>
+        ) : teachingLoadQuery.isError ? (
+          <Alert
+            type="error"
+            showIcon
+            message={errorMessage(teachingLoadQuery.error)}
+            action={
+              <Button size="small" onClick={() => void teachingLoadQuery.refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        ) : (
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <div>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>
+                Class teacher of:
+              </Text>
+              {(teachingLoadQuery.data?.classTeacherOf.length ?? 0) === 0 ? (
+                <Text type="secondary">None</Text>
+              ) : (
+                <Space wrap size={[8, 8]}>
+                  {teachingLoadQuery.data?.classTeacherOf.map((ref) => (
+                    <Tag key={ref.classId} color="blue" bordered={false}>
+                      {ref.className} ({ref.academicYear})
+                    </Tag>
+                  ))}
+                </Space>
+              )}
+            </div>
+
+            <Table<SubjectAssignment>
+              rowKey={(row) => `${row.classId}-${row.subjectId}`}
+              columns={teachingLoadColumns}
+              dataSource={teachingLoadQuery.data?.subjects ?? []}
+              pagination={false}
+              scroll={{ x: 'max-content' }}
+              locale={{ emptyText: <Empty description="No subject assignments yet" /> }}
+            />
+          </Space>
+        )}
+      </Drawer>
     </div>
   );
 }

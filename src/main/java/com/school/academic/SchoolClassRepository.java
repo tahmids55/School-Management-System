@@ -13,15 +13,31 @@ import java.util.Optional;
 public interface SchoolClassRepository extends JpaRepository<SchoolClass, Long> {
 
     /**
-     * One SELECT for all classes of a year. "join fetch" loads each class's year in the same query,
-     * so reading academicYear.getName() later does not fire one extra query per class (N+1).
+     * One SELECT for all classes of a year. "join fetch" loads each class's year and optional class teacher
+     * in the same query, avoiding N+1 queries when building ClassResponse.
      */
-    @Query("select c from SchoolClass c join fetch c.academicYear"
+    @Query("select c from SchoolClass c join fetch c.academicYear left join fetch c.classTeacher"
             + " where c.academicYear.id = :yearId order by c.name, c.section")
     List<SchoolClass> findAllByYearWithYear(@Param("yearId") Long yearId);
 
-    @Query("select c from SchoolClass c join fetch c.academicYear where c.id = :id")
+    @Query("select c from SchoolClass c join fetch c.academicYear left join fetch c.classTeacher"
+            + " where c.academicYear.id = :yearId and c.id in :ids order by c.name, c.section")
+    List<SchoolClass> findAllByYearAndIdsWithYear(
+            @Param("yearId") Long yearId,
+            @Param("ids") Collection<Long> ids
+    );
+
+    @Query("select c from SchoolClass c join fetch c.academicYear left join fetch c.classTeacher where c.id = :id")
     Optional<SchoolClass> findByIdWithYear(@Param("id") Long id);
+
+    boolean existsByIdAndClassTeacherId(Long id, Long classTeacherId);
+
+    @Query("select c.id from SchoolClass c where c.classTeacher.id = :teacherId")
+    List<Long> findIdsByClassTeacherId(@Param("teacherId") Long teacherId);
+
+    @Query("select c from SchoolClass c join fetch c.academicYear y"
+            + " where c.classTeacher.id = :teacherId order by y.startDate desc, c.name asc, c.section asc")
+    List<SchoolClass> findAllByClassTeacherIdWithYear(@Param("teacherId") Long teacherId);
 
     boolean existsByAcademicYearId(Long academicYearId);
 

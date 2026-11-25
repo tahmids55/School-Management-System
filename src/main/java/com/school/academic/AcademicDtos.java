@@ -1,5 +1,6 @@
 package com.school.academic;
 
+import com.school.teacher.Teacher;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -64,7 +65,6 @@ public final class AcademicDtos {
         }
     }
 
-    /** classTeacherId is accepted but not stored yet: F16 maps the class teacher. */
     public record ClassRequest(
             @NotNull Long academicYearId,
             @NotBlank @Size(max = 30) String name,
@@ -75,10 +75,6 @@ public final class AcademicDtos {
     ) {
     }
 
-    /**
-     * classTeacherId / classTeacherName stay null until F16 (and are then left out of the JSON);
-     * studentCount comes from the students table. The JSON shape never has to change.
-     */
     public record ClassResponse(
             Long id,
             Long academicYearId,
@@ -92,8 +88,9 @@ public final class AcademicDtos {
             String classTeacherName,
             long studentCount
     ) {
-        /** The class's academicYear must already be loaded (join fetch), or this triggers a query. */
+        /** The class's academicYear and optional classTeacher must already be loaded (join fetch) to avoid N+1. */
         public static ClassResponse from(SchoolClass schoolClass, long studentCount) {
+            Teacher classTeacher = schoolClass.getClassTeacher();
             return new ClassResponse(
                     schoolClass.getId(),
                     schoolClass.getAcademicYear().getId(),
@@ -103,9 +100,41 @@ public final class AcademicDtos {
                     schoolClass.getDisplayName(),
                     schoolClass.getRoom(),
                     schoolClass.getCapacity(),
-                    null,
-                    null,
+                    classTeacher != null ? classTeacher.getId() : null,
+                    classTeacher != null ? classTeacher.getFullName() : null,
                     studentCount
+            );
+        }
+    }
+
+    public record ClassSubjectRequest(
+            @NotNull Long subjectId,
+            Long teacherId
+    ) {
+    }
+
+    public record ClassSubjectResponse(
+            Long id,
+            Long subjectId,
+            String subjectCode,
+            String subjectName,
+            int fullMarks,
+            int passMarks,
+            Long teacherId,
+            String teacherName
+    ) {
+        public static ClassSubjectResponse from(ClassSubject classSubject) {
+            Subject subject = classSubject.getSubject();
+            Teacher teacher = classSubject.getTeacher();
+            return new ClassSubjectResponse(
+                    classSubject.getId(),
+                    subject.getId(),
+                    subject.getCode(),
+                    subject.getName(),
+                    subject.getFullMarks(),
+                    subject.getPassMarks(),
+                    teacher != null ? teacher.getId() : null,
+                    teacher != null ? teacher.getFullName() : null
             );
         }
     }

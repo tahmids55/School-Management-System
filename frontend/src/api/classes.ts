@@ -27,6 +27,22 @@ export interface ClassRequest {
   classTeacherId?: number | null;
 }
 
+export interface ClassSubject {
+  id: number;
+  subjectId: number;
+  subjectCode: string;
+  subjectName: string;
+  fullMarks: number;
+  passMarks: number;
+  teacherId?: number | null;
+  teacherName?: string | null;
+}
+
+export interface ClassSubjectRequest {
+  subjectId: number;
+  teacherId?: number | null;
+}
+
 /** GET /classes (ADMIN, TEACHER). Without a year: the current year's classes (empty when none is current). */
 export async function listClasses(academicYearId?: number): Promise<SchoolClass[]> {
   const { data } = await api.get<SchoolClass[]>('/classes', { params: { academicYearId } });
@@ -56,9 +72,30 @@ export async function deleteClass(id: number): Promise<void> {
   await api.delete(`/classes/${id}`);
 }
 
+/** GET /classes/{id}/subjects (ADMIN, TEACHER). Ordered by subject code. */
+export async function listClassSubjects(classId: number): Promise<ClassSubject[]> {
+  const { data } = await api.get<ClassSubject[]>(`/classes/${classId}/subjects`);
+  return data;
+}
+
+/** PUT /classes/{id}/subjects (ADMIN). Adds or updates the subject's teacher (null allowed). */
+export async function assignClassSubject(
+  classId: number,
+  request: ClassSubjectRequest,
+): Promise<ClassSubject> {
+  const { data } = await api.put<ClassSubject>(`/classes/${classId}/subjects`, request);
+  return data;
+}
+
+/** DELETE /classes/{id}/subjects/{subjectId} (ADMIN). */
+export async function removeClassSubject(classId: number, subjectId: number): Promise<void> {
+  await api.delete(`/classes/${classId}/subjects/${subjectId}`);
+}
+
 /** React Query keys. Invalidate classKeys.all to refresh every class list. */
 export const classKeys = {
   all: ['classes'] as const,
   /** undefined = "the current year" */
   list: (academicYearId?: number) => ['classes', academicYearId ?? 'current'] as const,
+  subjects: (classId: number) => ['classes', classId, 'subjects'] as const,
 };

@@ -5,6 +5,7 @@ import com.school.teacher.TeacherDtos.CreatedTeacherResponse;
 import com.school.teacher.TeacherDtos.StatusRequest;
 import com.school.teacher.TeacherDtos.TeacherRequest;
 import com.school.teacher.TeacherDtos.TeacherResponse;
+import com.school.teacher.TeacherDtos.TeachingLoad;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -40,6 +41,18 @@ public class TeacherController {
             @PageableDefault(size = 20, sort = "firstName") Pageable pageable
     ) {
         return ResponseEntity.ok(teacherService.list(q, status, pageable));
+    }
+
+    @PreAuthorize("hasRole('TEACHER')")
+    @GetMapping("/me/teaching-load")
+    public ResponseEntity<TeachingLoad> myTeachingLoad() {
+        return ResponseEntity.ok(teacherService.myTeachingLoad());
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
+    @GetMapping("/{id}/teaching-load")
+    public ResponseEntity<TeachingLoad> teachingLoad(@PathVariable Long id) {
+        return ResponseEntity.ok(teacherService.teachingLoad(id));
     }
 
     @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")

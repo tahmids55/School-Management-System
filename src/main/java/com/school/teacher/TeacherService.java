@@ -1,14 +1,20 @@
 package com.school.teacher;
 
+import com.school.academic.ClassSubjectRepository;
+import com.school.academic.SchoolClassRepository;
 import com.school.audit.AuditService;
 import com.school.common.PageResponse;
 import com.school.common.exception.BusinessRuleException;
 import com.school.common.exception.ConflictException;
 import com.school.common.exception.NotFoundException;
+import com.school.security.AccessGuard;
+import com.school.teacher.TeacherDtos.ClassRef;
 import com.school.teacher.TeacherDtos.CreatedTeacherResponse;
 import com.school.teacher.TeacherDtos.StatusRequest;
+import com.school.teacher.TeacherDtos.SubjectAssignment;
 import com.school.teacher.TeacherDtos.TeacherRequest;
 import com.school.teacher.TeacherDtos.TeacherResponse;
+import com.school.teacher.TeacherDtos.TeachingLoad;
 import com.school.user.AppUser;
 import com.school.user.AppUserRepository;
 import com.school.user.Role;
@@ -22,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -47,6 +54,9 @@ public class TeacherService {
     );
 
     private final TeacherRepository teacherRepository;
+    private final SchoolClassRepository schoolClassRepository;
+    private final ClassSubjectRepository classSubjectRepository;
+    private final AccessGuard accessGuard;
     private final UserService userService;
     private final AppUserRepository appUserRepository;
     private final AuditService auditService;
@@ -54,12 +64,18 @@ public class TeacherService {
 
     public TeacherService(
             TeacherRepository teacherRepository,
+            SchoolClassRepository schoolClassRepository,
+            ClassSubjectRepository classSubjectRepository,
+            AccessGuard accessGuard,
             UserService userService,
             AppUserRepository appUserRepository,
             AuditService auditService,
             Clock clock
     ) {
         this.teacherRepository = teacherRepository;
+        this.schoolClassRepository = schoolClassRepository;
+        this.classSubjectRepository = classSubjectRepository;
+        this.accessGuard = accessGuard;
         this.userService = userService;
         this.appUserRepository = appUserRepository;
         this.auditService = auditService;
@@ -92,6 +108,30 @@ public class TeacherService {
     @Transactional(readOnly = true)
     public TeacherResponse get(Long id) {
         return TeacherResponse.from(findWithUserOrThrow(id));
+    }
+
+    @Transactional(readOnly = true)
+    public TeachingLoad teachingLoad(Long id) {
+        if (!teacherRepository.existsById(id)) {
+            throw new NotFoundException(ENTITY_TYPE, id);
+        }
+        return loadForTeacher(id);
+    }
+
+    @Transactional(readOnly = true)
+    public TeachingLoad myTeachingLoad() {
+        Teacher teacher = accessGuard.currentTeacher();
+        return loadForTeacher(teacher.getId());
+    }
+
+    private TeachingLoad loadForTeacher(Long teacherId) {
+        List<ClassRef> classTeacherOf = schoolClassRepository.findAllByClassTeacherIdWithYear(teacherId).stream()
+                .map(ClassRef::from)
+                .toList();
+        List<SubjectAssignment> subjects = classSubjectRepository.findAllByTeacherIdWithDetails(teacherId).stream()
+                .map(SubjectAssignment::from)
+                .toList();
+        return new TeachingLoad(classTeacherOf, subjects);
     }
 
     @Transactional

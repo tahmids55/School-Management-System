@@ -68,6 +68,9 @@ public interface TeacherRepository extends JpaRepository<Teacher, Long> {
     @Query("select t.id from Teacher t join t.user u where lower(u.username) = lower(:username)")
     Optional<Long> findIdByUserUsernameIgnoreCase(@Param("username") String username);
 
+    @Query("select t from Teacher t join t.user u where lower(u.username) = lower(:username)")
+    Optional<Teacher> findByUserUsernameIgnoreCase(@Param("username") String username);
+
     boolean existsByEmployeeNoIgnoreCase(String employeeNo);
 
     boolean existsByEmailIgnoreCase(String email);
