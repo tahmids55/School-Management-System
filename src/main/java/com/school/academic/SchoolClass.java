@@ -1,18 +1,24 @@
 package com.school.academic;
 
 import com.school.common.BaseEntity;
+import com.school.teacher.Teacher;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * A class section such as "Class 9 - A" inside one academic year, mapped to {@code school_classes}.
- * Many classes belong to one year (M:1). class_teacher_id is not mapped yet: F16 adds it.
+ * Many classes belong to one year (M:1), with an optional class teacher and subject assignments.
  */
 @Getter
 @Setter
@@ -36,6 +42,14 @@ public class SchoolClass extends BaseEntity {
     @Column(nullable = false)
     private int capacity;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "class_teacher_id")
+    private Teacher classTeacher;
+
+    @Setter(AccessLevel.NONE)
+    @OneToMany(mappedBy = "schoolClass", fetch = FetchType.LAZY)
+    private List<ClassSubject> classSubjects = new ArrayList<>();
+
     protected SchoolClass() {
     }
 
@@ -45,6 +59,18 @@ public class SchoolClass extends BaseEntity {
         this.section = section;
         this.room = room;
         this.capacity = capacity;
+    }
+
+    public SchoolClass(
+            AcademicYear academicYear,
+            String name,
+            String section,
+            String room,
+            int capacity,
+            Teacher classTeacher
+    ) {
+        this(academicYear, name, section, room, capacity);
+        this.classTeacher = classTeacher;
     }
 
     /** "Class 6 - A" */

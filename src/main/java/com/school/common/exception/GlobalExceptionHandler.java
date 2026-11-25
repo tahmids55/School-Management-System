@@ -18,6 +18,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.ObjectError;
@@ -200,7 +201,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
-        return problemResponse(HttpStatus.FORBIDDEN, ACCESS_DENIED_DETAIL);
+        String detail = (ex instanceof AuthorizationDeniedException
+                || ex.getMessage() == null
+                || ex.getMessage().isBlank()
+                || "Access Denied".equals(ex.getMessage()))
+                ? ACCESS_DENIED_DETAIL
+                : ex.getMessage();
+        return problemResponse(HttpStatus.FORBIDDEN, detail);
     }
 
     @ExceptionHandler(NotFoundException.class)

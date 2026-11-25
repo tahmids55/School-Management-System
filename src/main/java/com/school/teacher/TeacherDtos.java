@@ -1,5 +1,7 @@
 package com.school.teacher;
 
+import com.school.academic.ClassSubject;
+import com.school.academic.SchoolClass;
 import com.school.user.UserDtos.TemporaryPasswordResponse;
 import com.school.user.UserService;
 import jakarta.validation.constraints.Email;
@@ -10,6 +12,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
+import java.util.List;
 
 public final class TeacherDtos {
 
@@ -79,5 +82,46 @@ public final class TeacherDtos {
                     TemporaryPasswordResponse.from(account)
             );
         }
+    }
+
+    public record ClassRef(
+            Long classId,
+            String className,
+            String academicYear
+    ) {
+        public static ClassRef from(SchoolClass schoolClass) {
+            return new ClassRef(
+                    schoolClass.getId(),
+                    schoolClass.getDisplayName(),
+                    schoolClass.getAcademicYear().getName()
+            );
+        }
+    }
+
+    public record SubjectAssignment(
+            Long classId,
+            String className,
+            String academicYear,
+            Long subjectId,
+            String subjectCode,
+            String subjectName
+    ) {
+        public static SubjectAssignment from(ClassSubject classSubject) {
+            SchoolClass schoolClass = classSubject.getSchoolClass();
+            return new SubjectAssignment(
+                    schoolClass.getId(),
+                    schoolClass.getDisplayName(),
+                    schoolClass.getAcademicYear().getName(),
+                    classSubject.getSubject().getId(),
+                    classSubject.getSubject().getCode(),
+                    classSubject.getSubject().getName()
+            );
+        }
+    }
+
+    public record TeachingLoad(
+            List<ClassRef> classTeacherOf,
+            List<SubjectAssignment> subjects
+    ) {
     }
 }

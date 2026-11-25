@@ -2,6 +2,9 @@ package com.school.academic;
 
 import com.school.IntegrationTestBase;
 import com.school.audit.AuditLogRepository;
+import com.school.teacher.Teacher;
+import com.school.teacher.TeacherRepository;
+import com.school.user.AppUser;
 import com.school.user.AppUserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
@@ -12,15 +15,19 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.Map;
 
 import static com.school.academic.AcademicYearIntegrationTest.as;
 import static com.school.academic.AcademicYearIntegrationTest.seedTestUsers;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -49,9 +56,25 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
     @Autowired
     private AppUserRepository appUserRepository;
 
+    @Autowired
+    private TeacherRepository teacherRepository;
+
+    private Teacher seededTeacher;
+
     @BeforeEach
     void setUpUsers() {
         seedTestUsers(appUserRepository);
+        AppUser teacherUser = appUserRepository.findByUsernameIgnoreCase("teacher").orElseThrow();
+        seededTeacher = teacherRepository.save(new Teacher(
+                teacherUser,
+                "T-1001",
+                "Ayesha",
+                "Rahman",
+                "ayesha@school.edu",
+                "+8801711111111",
+                "Senior Teacher",
+                LocalDate.of(2025, 1, 1)
+        ));
     }
 
     /** Creates a year through the API; the first one becomes current. */
@@ -65,12 +88,24 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
     }
 
     private String body(long yearId, String name, String section, String room, Object capacity) throws Exception {
+        return body(yearId, name, section, room, capacity, null);
+    }
+
+    private String body(
+            long yearId,
+            String name,
+            String section,
+            String room,
+            Object capacity,
+            Long classTeacherId
+    ) throws Exception {
         Map<String, Object> map = new HashMap<>();
         map.put("academicYearId", yearId);
         map.put("name", name);
         map.put("section", section);
         map.put("room", room);
         map.put("capacity", capacity);
+        map.put("classTeacherId", classTeacherId);
         return objectMapper.writeValueAsString(map);
     }
 
@@ -147,7 +182,7 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
         createId(current, "Class 6", "A");
         createId(next, "Class 10", "A");
 
-        mockMvc.perform(get(URL).with(as("TEACHER")))
+        mockMvc.perform(get(URL).with(as("ADMIN")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].displayName").value("Class 6 - A"))
@@ -232,7 +267,7 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
         addStudent(id, "ADM-1");
         addStudent(id, "ADM-2");
 
-        mockMvc.perform(get(URL + "/" + id).with(as("TEACHER")))
+        mockMvc.perform(get(URL + "/" + id).with(as("ADMIN")))
                 .andExpect(jsonPath("$.studentCount").value(2));
         mockMvc.perform(put(URL + "/" + id).with(as("ADMIN"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -299,18 +334,66 @@ class SchoolClassIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void reads_adminAndTeacherAllowed_studentDenied() throws Exception {
-        long id = createId(year("2026"), "Class 6", "A");
+    void reads_adminAndAssignedTeacherAllowed_unrelatedTeacherAndStudentDenied() throws Exception {
+        long yearId = year("2026");
+        MvcResult assignedRes = mockMvc.perform(post(URL).with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(yearId, "Class 6", "A", "R-101", 40, seededTeacher.getId())))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.classTeacherId").value(seededTeacher.getId()))
+                .andExpect(jsonPath("$.classTeacherName").value("Ayesha Rahman"))
+                .andReturn();
+        long assignedId = objectMapper.readTree(assignedRes.getResponse().getContentAsString()).get("id").asLong();
+        long otherId = createId(yearId, "Class 6", "B");
 
-        for (String role : new String[] {"ADMIN", "TEACHER"}) {
-            mockMvc.perform(get(URL).with(as(role))).andExpect(status().isOk());
-            mockMvc.perform(get(URL + "/" + id).with(as(role))).andExpect(status().isOk());
-        }
+        mockMvc.perform(get(URL).with(as("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
+        mockMvc.perform(get(URL + "/" + otherId).with(as("ADMIN"))).andExpect(status().isOk());
+
+        // Assigned teacher sees only their class in list, can read assigned detail, gets 403 for unassigned detail
+        mockMvc.perform(get(URL).with(as("TEACHER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(assignedId));
+        mockMvc.perform(get(URL + "/" + assignedId).with(as("TEACHER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classTeacherId").value(seededTeacher.getId()));
+        mockMvc.perform(get(URL + "/" + otherId).with(as("TEACHER")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("You do not teach in this class"));
+
+        // Teacher user with no linked Teacher row gets empty list and 403 on detail
+        RequestPostProcessor unlinkedTeacher = jwt().jwt(t -> t.subject("unlinked"))
+                .authorities(new SimpleGrantedAuthority("ROLE_TEACHER"));
+        appUserRepository.save(new AppUser("unlinked", "unlinked@school.edu", "$2a$12$testHashPlaceholder",
+                "Unlinked Teacher", com.school.user.Role.TEACHER));
+        mockMvc.perform(get(URL).with(unlinkedTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        mockMvc.perform(get(URL + "/" + assignedId).with(unlinkedTeacher))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("No teacher profile is linked to this account"));
+
         mockMvc.perform(get(URL).with(as("STUDENT")))
                 .andExpect(status().isForbidden())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
-        mockMvc.perform(get(URL + "/" + id).with(as("STUDENT"))).andExpect(status().isForbidden());
+        mockMvc.perform(get(URL + "/" + assignedId).with(as("STUDENT"))).andExpect(status().isForbidden());
         mockMvc.perform(get(URL)).andExpect(status().isUnauthorized());
+
+        // Unknown classTeacherId returns 404; null clears class teacher
+        mockMvc.perform(put(URL + "/" + assignedId).with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(yearId, "Class 6", "A", "R-101", 40, 999999L)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Teacher 999999 was not found"));
+
+        mockMvc.perform(put(URL + "/" + assignedId).with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(yearId, "Class 6", "A", "R-101", 40, null)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classTeacherId").doesNotExist())
+                .andExpect(jsonPath("$.classTeacherName").doesNotExist());
     }
 
     @Test

@@ -5,16 +5,26 @@ import com.school.academic.AcademicDtos.ClassResponse;
 import com.school.audit.AuditService;
 import com.school.common.exception.ConflictException;
 import com.school.common.exception.NotFoundException;
+import com.school.security.AccessGuard;
+import com.school.security.TeachingScope;
+import com.school.teacher.Teacher;
+import com.school.teacher.TeacherRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -22,6 +32,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -37,6 +49,15 @@ class SchoolClassServiceTest {
     private AcademicYearRepository yearRepository;
 
     @Mock
+    private TeacherRepository teacherRepository;
+
+    @Mock
+    private AccessGuard accessGuard;
+
+    @Mock
+    private TeachingScope teachingScope;
+
+    @Mock
     private AuditService auditService;
 
     private SchoolClassService service;
@@ -45,9 +66,22 @@ class SchoolClassServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SchoolClassService(classRepository, yearRepository, auditService);
+        service = new SchoolClassService(
+                classRepository,
+                yearRepository,
+                teacherRepository,
+                accessGuard,
+                teachingScope,
+                auditService
+        );
         year2026 = new AcademicYear("2026", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31));
         ReflectionTestUtils.setField(year2026, "id", 1L);
+        lenient().when(accessGuard.isAdmin()).thenReturn(true);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     private SchoolClass schoolClass(long id, String name, String section) {
@@ -209,5 +243,63 @@ class SchoolClassServiceTest {
         verify(classRepository).delete(existing);
         verify(classRepository).flush();
         verify(auditService).record(eq("CLASS_DELETED"), eq("SchoolClass"), eq("10"), anyString());
+    }
+
+    @Test
+    void list_asTeacher_filtersToTeachingScope_andReturnsEmptyWhenNone() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(
+                        "t-1001", "n/a", List.of(new SimpleGrantedAuthority("ROLE_TEACHER"))));
+        when(accessGuard.isAdmin()).thenReturn(false);
+        when(yearRepository.findByCurrentTrue()).thenReturn(Optional.of(year2026));
+        when(teachingScope.accessibleClassIds("t-1001")).thenReturn(Set.of());
+
+        assertThat(service.list(null)).isEmpty();
+        verify(classRepository, never()).findAllByYearWithYear(anyLong());
+
+        when(teachingScope.accessibleClassIds("t-1001")).thenReturn(Set.of(10L));
+        when(classRepository.findAllByYearAndIdsWithYear(1L, Set.of(10L)))
+                .thenReturn(List.of(schoolClass(10, "Class 6", "A")));
+        when(classRepository.countStudentsByClassIds(List.of(10L))).thenReturn(List.of());
+
+        assertThat(service.list(null)).extracting(ClassResponse::id).containsExactly(10L);
+    }
+
+    @Test
+    void get_checksCanManageClass() {
+        SchoolClass existing = schoolClass(10, "Class 6", "A");
+        when(classRepository.findByIdWithYear(10L)).thenReturn(Optional.of(existing));
+        doThrow(new AccessDeniedException("You do not teach in this class"))
+                .when(accessGuard).checkCanManageClass(10L);
+
+        assertThatThrownBy(() -> service.get(10L))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("You do not teach in this class");
+    }
+
+    @Test
+    void create_withClassTeacher_mapsIdAndName_andUnknownTeacherThrows404() {
+        Teacher teacher = new Teacher(
+                null, "T-1001", "Ayesha", "Rahman", "ayesha@school.edu",
+                "01700000000", "Senior Teacher", LocalDate.of(2025, 1, 1));
+        ReflectionTestUtils.setField(teacher, "id", 7L);
+
+        when(yearRepository.findById(1L)).thenReturn(Optional.of(year2026));
+        when(classRepository.existsByAcademicYearIdAndNameIgnoreCaseAndSection(1L, "Class 6", "A")).thenReturn(false);
+        when(teacherRepository.findById(7L)).thenReturn(Optional.of(teacher));
+        when(classRepository.save(any(SchoolClass.class))).thenAnswer(invocation -> {
+            SchoolClass saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", 5L);
+            return saved;
+        });
+
+        ClassResponse response = service.create(new ClassRequest(1L, "Class 6", "A", "R-101", 40, 7L));
+        assertThat(response.classTeacherId()).isEqualTo(7L);
+        assertThat(response.classTeacherName()).isEqualTo("Ayesha Rahman");
+
+        when(teacherRepository.findById(99L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.create(new ClassRequest(1L, "Class 6", "A", "R-101", 40, 99L)))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessage("Teacher 99 was not found");
     }
 }

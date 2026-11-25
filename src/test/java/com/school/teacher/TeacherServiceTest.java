@@ -1,14 +1,22 @@
 package com.school.teacher;
 
+import com.school.academic.AcademicYear;
+import com.school.academic.ClassSubject;
+import com.school.academic.ClassSubjectRepository;
+import com.school.academic.SchoolClass;
+import com.school.academic.SchoolClassRepository;
+import com.school.academic.Subject;
 import com.school.audit.AuditService;
 import com.school.common.PageResponse;
 import com.school.common.exception.BusinessRuleException;
 import com.school.common.exception.ConflictException;
 import com.school.common.exception.NotFoundException;
+import com.school.security.AccessGuard;
 import com.school.teacher.TeacherDtos.CreatedTeacherResponse;
 import com.school.teacher.TeacherDtos.StatusRequest;
 import com.school.teacher.TeacherDtos.TeacherRequest;
 import com.school.teacher.TeacherDtos.TeacherResponse;
+import com.school.teacher.TeacherDtos.TeachingLoad;
 import com.school.user.AppUser;
 import com.school.user.AppUserRepository;
 import com.school.user.Role;
@@ -54,6 +62,15 @@ class TeacherServiceTest {
     private TeacherRepository teacherRepository;
 
     @Mock
+    private SchoolClassRepository schoolClassRepository;
+
+    @Mock
+    private ClassSubjectRepository classSubjectRepository;
+
+    @Mock
+    private AccessGuard accessGuard;
+
+    @Mock
     private UserService userService;
 
     @Mock
@@ -68,6 +85,9 @@ class TeacherServiceTest {
     void setUp() {
         teacherService = new TeacherService(
                 teacherRepository,
+                schoolClassRepository,
+                classSubjectRepository,
+                accessGuard,
                 userService,
                 appUserRepository,
                 auditService,
@@ -355,5 +375,53 @@ class TeacherServiceTest {
                 .hasMessage("Invalid sort field: badField");
 
         verifyNoInteractions(teacherRepository);
+    }
+
+    @Test
+    void teachingLoad_returnsClassTeacherAndSubjects_andMissingTeacherThrows404() {
+        AcademicYear year = new AcademicYear("2026", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31));
+        SchoolClass schoolClass = new SchoolClass(year, "Class 9", "A", "R-101", 40);
+        ReflectionTestUtils.setField(schoolClass, "id", 10L);
+        Subject subject = new Subject("PHY101", "Physics", 100, 33);
+        ReflectionTestUtils.setField(subject, "id", 20L);
+        ClassSubject assignment = new ClassSubject(schoolClass, subject, null);
+
+        when(teacherRepository.existsById(7L)).thenReturn(true);
+        when(schoolClassRepository.findAllByClassTeacherIdWithYear(7L)).thenReturn(List.of(schoolClass));
+        when(classSubjectRepository.findAllByTeacherIdWithDetails(7L)).thenReturn(List.of(assignment));
+
+        TeachingLoad load = teacherService.teachingLoad(7L);
+        assertThat(load.classTeacherOf()).singleElement().satisfies(ref -> {
+            assertThat(ref.classId()).isEqualTo(10L);
+            assertThat(ref.className()).isEqualTo("Class 9 - A");
+            assertThat(ref.academicYear()).isEqualTo("2026");
+        });
+        assertThat(load.subjects()).singleElement().satisfies(sub -> {
+            assertThat(sub.classId()).isEqualTo(10L);
+            assertThat(sub.subjectId()).isEqualTo(20L);
+            assertThat(sub.subjectCode()).isEqualTo("PHY101");
+            assertThat(sub.subjectName()).isEqualTo("Physics");
+        });
+
+        when(teacherRepository.existsById(99L)).thenReturn(false);
+        assertThatThrownBy(() -> teacherService.teachingLoad(99L))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessage("Teacher 99 was not found");
+    }
+
+    @Test
+    void myTeachingLoad_usesCurrentTeacherFromAccessGuard() {
+        Teacher teacher = new Teacher(
+                null, "T-1007", "Ayesha", "Rahman", "ayesha@school.edu",
+                "01700000000", "Lecturer", LocalDate.of(2024, 1, 1));
+        ReflectionTestUtils.setField(teacher, "id", 7L);
+        when(accessGuard.currentTeacher()).thenReturn(teacher);
+        when(schoolClassRepository.findAllByClassTeacherIdWithYear(7L)).thenReturn(List.of());
+        when(classSubjectRepository.findAllByTeacherIdWithDetails(7L)).thenReturn(List.of());
+
+        TeachingLoad load = teacherService.myTeachingLoad();
+        assertThat(load.classTeacherOf()).isEmpty();
+        assertThat(load.subjects()).isEmpty();
+        verify(accessGuard).currentTeacher();
     }
 }

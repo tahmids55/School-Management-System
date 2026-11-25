@@ -52,6 +52,26 @@ export interface TeacherListParams {
   sort?: string;
 }
 
+export interface ClassRef {
+  classId: number;
+  className: string;
+  academicYear: string;
+}
+
+export interface SubjectAssignment {
+  classId: number;
+  className: string;
+  academicYear: string;
+  subjectId: number;
+  subjectCode: string;
+  subjectName: string;
+}
+
+export interface TeachingLoad {
+  classTeacherOf: ClassRef[];
+  subjects: SubjectAssignment[];
+}
+
 export async function listTeachers(params: TeacherListParams = {}): Promise<PageResponse<Teacher>> {
   const { data } = await api.get<PageResponse<Teacher>>('/teachers', { params });
   return data;
@@ -77,8 +97,20 @@ export async function updateTeacherStatus(id: number, status: TeacherStatus): Pr
   return data;
 }
 
+export async function getTeacherTeachingLoad(id: number): Promise<TeachingLoad> {
+  const { data } = await api.get<TeachingLoad>(`/teachers/${id}/teaching-load`);
+  return data;
+}
+
+export async function getMyTeachingLoad(): Promise<TeachingLoad> {
+  const { data } = await api.get<TeachingLoad>('/teachers/me/teaching-load');
+  return data;
+}
+
 export const teacherKeys = {
   all: ['teachers'] as const,
   list: (params: TeacherListParams) => ['teachers', 'list', params] as const,
   active: ['teachers', 'active'] as const,
+  teachingLoad: (id: number) => ['teachers', id, 'teaching-load'] as const,
+  myTeachingLoad: ['teachers', 'me', 'teaching-load'] as const,
 };

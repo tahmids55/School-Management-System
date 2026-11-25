@@ -469,4 +469,101 @@ class TeacherIntegrationTest extends IntegrationTestBase {
         mockMvc.perform(delete(URL + "/" + teacherId).with(as("ADMIN")))
                 .andExpect(status().isMethodNotAllowed());
     }
+
+    @Test
+    void teachingLoad_returnsClassTeacherAndSubjects_withRoleAndProfileChecks() throws Exception {
+        MvcResult created = createTeacher("T-4001", "Rafiq", "Ahmed", "rafiq@school.edu")
+                .andExpect(status().isCreated())
+                .andReturn();
+        long teacherId = objectMapper.readTree(created.getResponse().getContentAsString())
+                .get("teacher").get("id").asLong();
+
+        // Create academic year, two classes (one with teacher as classTeacher), and two subjects
+        MvcResult yearRes = mockMvc.perform(post("/api/v1/academic-years").with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"2026\",\"startDate\":\"2026-01-01\",\"endDate\":\"2026-12-31\"}"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long yearId = objectMapper.readTree(yearRes.getResponse().getContentAsString()).get("id").asLong();
+
+        MvcResult class1Res = mockMvc.perform(post("/api/v1/classes").with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "academicYearId", yearId,
+                                "name", "Class 9",
+                                "section", "A",
+                                "capacity", 40,
+                                "classTeacherId", teacherId))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long class1Id = objectMapper.readTree(class1Res.getResponse().getContentAsString()).get("id").asLong();
+
+        MvcResult class2Res = mockMvc.perform(post("/api/v1/classes").with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "academicYearId", yearId,
+                                "name", "Class 10",
+                                "section", "A",
+                                "capacity", 40))))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long class2Id = objectMapper.readTree(class2Res.getResponse().getContentAsString()).get("id").asLong();
+
+        MvcResult subRes = mockMvc.perform(post("/api/v1/subjects").with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"MAT101\",\"name\":\"Mathematics\",\"fullMarks\":100,\"passMarks\":33}"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long subjectId = objectMapper.readTree(subRes.getResponse().getContentAsString()).get("id").asLong();
+
+        mockMvc.perform(put("/api/v1/classes/" + class2Id + "/subjects").with(as("ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "subjectId", subjectId,
+                                "teacherId", teacherId))))
+                .andExpect(status().isOk());
+
+        // GET /teachers/{id}/teaching-load: ADMIN and TEACHER allowed, STUDENT 403, missing 404
+        for (String role : new String[] {"ADMIN", "TEACHER"}) {
+            mockMvc.perform(get(URL + "/" + teacherId + "/teaching-load").with(as(role)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.classTeacherOf.length()").value(1))
+                    .andExpect(jsonPath("$.classTeacherOf[0].classId").value(class1Id))
+                    .andExpect(jsonPath("$.classTeacherOf[0].className").value("Class 9 - A"))
+                    .andExpect(jsonPath("$.classTeacherOf[0].academicYear").value("2026"))
+                    .andExpect(jsonPath("$.subjects.length()").value(1))
+                    .andExpect(jsonPath("$.subjects[0].classId").value(class2Id))
+                    .andExpect(jsonPath("$.subjects[0].className").value("Class 10 - A"))
+                    .andExpect(jsonPath("$.subjects[0].academicYear").value("2026"))
+                    .andExpect(jsonPath("$.subjects[0].subjectId").value(subjectId))
+                    .andExpect(jsonPath("$.subjects[0].subjectCode").value("MAT101"))
+                    .andExpect(jsonPath("$.subjects[0].subjectName").value("Mathematics"));
+        }
+        mockMvc.perform(get(URL + "/" + teacherId + "/teaching-load").with(as("STUDENT")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(URL + "/999999/teaching-load").with(as("ADMIN")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Teacher 999999 was not found"));
+
+        // GET /teachers/me/teaching-load: TEACHER with profile allowed, unlinked TEACHER 403, ADMIN/STUDENT 403, anon 401
+        AppUser rafiqUser = appUserRepository.findByUsernameIgnoreCase("t-4001").orElseThrow();
+        rafiqUser.setMustChangePassword(false);
+        appUserRepository.saveAndFlush(rafiqUser);
+        RequestPostProcessor rafiq = jwt().jwt(t -> t.subject("t-4001"))
+                .authorities(new SimpleGrantedAuthority("ROLE_TEACHER"));
+        mockMvc.perform(get(URL + "/me/teaching-load").with(rafiq))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classTeacherOf[0].classId").value(class1Id))
+                .andExpect(jsonPath("$.subjects[0].subjectCode").value("MAT101"));
+
+        mockMvc.perform(get(URL + "/me/teaching-load").with(as("TEACHER")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("No teacher profile is linked to this account"));
+        mockMvc.perform(get(URL + "/me/teaching-load").with(as("ADMIN")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(URL + "/me/teaching-load").with(as("STUDENT")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(URL + "/me/teaching-load"))
+                .andExpect(status().isUnauthorized());
+    }
 }
