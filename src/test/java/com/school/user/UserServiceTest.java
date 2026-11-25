@@ -2,19 +2,33 @@ package com.school.user;
 
 import com.school.audit.AuditService;
 import com.school.auth.RefreshTokenService;
+import com.school.common.PageResponse;
+import com.school.common.exception.BusinessRuleException;
 import com.school.common.exception.ConflictException;
 import com.school.common.exception.NotFoundException;
 import com.school.user.UserDtos.TemporaryPasswordResponse;
+import com.school.user.UserDtos.UserResponse;
 import com.school.user.UserService.NewAccount;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +57,8 @@ class UserServiceTest {
     @Mock
     private RefreshTokenService refreshTokenService;
 
+    private static final Instant FIXED_NOW = Instant.parse("2026-11-25T10:00:00Z");
+
     @Mock
     private AuditService auditService;
 
@@ -50,13 +66,20 @@ class UserServiceTest {
 
     @BeforeEach
     void setUp() {
+        Clock clock = Clock.fixed(FIXED_NOW, ZoneId.of("Asia/Dhaka"));
         userService = new UserService(
                 appUserRepository,
                 passwordEncoder,
                 passwordGenerator,
                 refreshTokenService,
-                auditService
+                auditService,
+                clock
         );
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
@@ -163,5 +186,72 @@ class UserServiceTest {
         userService.disable(null);
 
         verifyNoInteractions(appUserRepository, refreshTokenService, auditService);
+    }
+
+    @Test
+    void search_escapesWildcards_computesLockedFromClock_andRejectsUnknownSort() {
+        AppUser lockedUser = new AppUser("t-1001", "ayesha@school.edu", "$2a$12$h", "Ayesha", Role.TEACHER);
+        ReflectionTestUtils.setField(lockedUser, "id", 2L);
+        lockedUser.setLockedUntil(FIXED_NOW.plusSeconds(600));
+
+        when(appUserRepository.searchByRole(eq(Role.TEACHER), eq("%50!% !_test%"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(lockedUser)));
+
+        PageResponse<UserResponse> response = userService.search(" 50% _Test ", Role.TEACHER, PageRequest.of(0, 20));
+
+        assertThat(response.content()).singleElement().satisfies(item -> {
+            assertThat(item.id()).isEqualTo(2L);
+            assertThat(item.locked()).isTrue();
+            assertThat(item.enabled()).isTrue();
+        });
+
+        assertThatThrownBy(() -> userService.search(null, null, PageRequest.of(0, 20, Sort.by("passwordHash"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid sort field");
+    }
+
+    @Test
+    void updateStatus_selfDisableThrows422_otherDisableRevokesAndAudits_enableAudits() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("admin", "n/a", List.of())
+        );
+        AppUser admin = new AppUser("admin", "admin@school.edu", "$2a$12$h", "Nasima", Role.ADMIN);
+        ReflectionTestUtils.setField(admin, "id", 1L);
+        when(appUserRepository.findById(1L)).thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> userService.updateStatus(1L, false))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessage("You cannot disable your own account");
+        verify(refreshTokenService, never()).revokeAllForUser(any());
+
+        AppUser teacher = new AppUser("t-1001", "t@school.edu", "$2a$12$h", "Ayesha", Role.TEACHER);
+        ReflectionTestUtils.setField(teacher, "id", 2L);
+        when(appUserRepository.findById(2L)).thenReturn(Optional.of(teacher));
+
+        UserResponse disabled = userService.updateStatus(2L, false);
+        assertThat(disabled.enabled()).isFalse();
+        verify(refreshTokenService).revokeAllForUser(teacher);
+        verify(auditService).record(eq(UserService.AUDIT_ACCOUNT_DISABLED), eq("AppUser"), eq("2"), contains("t-1001"));
+
+        UserResponse reenabled = userService.updateStatus(2L, true);
+        assertThat(reenabled.enabled()).isTrue();
+        verify(auditService).record(eq(UserService.AUDIT_ACCOUNT_ENABLED), eq("AppUser"), eq("2"), contains("t-1001"));
+    }
+
+    @Test
+    void unlock_clearsLockTimeAndFailedCounter_andAudits() {
+        AppUser student = new AppUser("s-1", "s@school.edu", "$2a$12$h", "Amina", Role.STUDENT);
+        ReflectionTestUtils.setField(student, "id", 3L);
+        student.setLockedUntil(FIXED_NOW.plusSeconds(300));
+        student.setFailedLoginAttempts(5);
+        when(appUserRepository.findById(3L)).thenReturn(Optional.of(student));
+
+        UserResponse unlocked = userService.unlock(3L);
+
+        assertThat(unlocked.locked()).isFalse();
+        assertThat(student.getLockedUntil()).isNull();
+        assertThat(student.getFailedLoginAttempts()).isZero();
+        verify(appUserRepository).save(student);
+        verify(auditService).record(eq(UserService.AUDIT_ACCOUNT_UNLOCKED), eq("AppUser"), eq("3"), contains("s-1"));
     }
 }
