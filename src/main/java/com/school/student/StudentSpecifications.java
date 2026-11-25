@@ -3,6 +3,7 @@ package com.school.student;
 import jakarta.persistence.criteria.Expression;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.util.Collection;
 import java.util.Locale;
 
 /**
@@ -23,6 +24,11 @@ final class StudentSpecifications {
             return null;
         }
         return (root, query, cb) -> cb.equal(root.get("schoolClass").get("id"), classId);
+    }
+
+    /** Only students of these classes (a teacher's own classes). An empty set must be handled before. */
+    static Specification<Student> inClasses(Collection<Long> classIds) {
+        return (root, query, cb) -> root.get("schoolClass").get("id").in(classIds);
     }
 
     static Specification<Student> hasStatus(StudentStatus status) {

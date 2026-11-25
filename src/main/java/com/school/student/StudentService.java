@@ -4,22 +4,29 @@ import com.school.academic.SchoolClass;
 import com.school.academic.SchoolClassRepository;
 import com.school.audit.AuditService;
 import com.school.common.PageResponse;
+import com.school.common.SecurityUtils;
+import com.school.common.exception.BusinessRuleException;
 import com.school.common.exception.ConflictException;
 import com.school.common.exception.NotFoundException;
+import com.school.security.StudentAccessGuard;
 import com.school.student.StudentDtos.CreatedStudentResponse;
 import com.school.student.StudentDtos.StatusRequest;
 import com.school.student.StudentDtos.StudentRequest;
 import com.school.student.StudentDtos.StudentResponse;
 import com.school.student.StudentDtos.StudentSummary;
+import com.school.user.Role;
+import com.school.user.UserDtos.TemporaryPasswordResponse;
 import com.school.user.UserService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Student records: search, admit, edit, place in a class with a roll number, and change status.
@@ -39,25 +46,40 @@ public class StudentService {
     private final UserService userService;
     private final AuditService auditService;
     private final StudentCsvExporter csvExporter;
+    private final StudentAccessGuard accessGuard;
 
     public StudentService(
             StudentRepository studentRepository,
             SchoolClassRepository schoolClassRepository,
             UserService userService,
             AuditService auditService,
-            StudentCsvExporter csvExporter
+            StudentCsvExporter csvExporter,
+            StudentAccessGuard accessGuard
     ) {
         this.studentRepository = studentRepository;
         this.schoolClassRepository = schoolClassRepository;
         this.userService = userService;
         this.auditService = auditService;
         this.csvExporter = csvExporter;
+        this.accessGuard = accessGuard;
     }
 
-    /** One page of students matching only the filters that were given. Always 2 queries: page + count. */
+    /**
+     * One page of students matching only the filters that were given. Always 2 queries: page + count.
+     * A TEACHER only ever gets students of their own classes: the restriction is part of the SQL,
+     * so it also applies when another classId is asked for. No classes = an empty page.
+     */
     @Transactional(readOnly = true)
     public PageResponse<StudentSummary> search(String q, Long classId, StudentStatus status, Pageable pageable) {
-        Page<Student> page = studentRepository.findAll(StudentSpecifications.search(q, classId, status), pageable);
+        Specification<Student> spec = StudentSpecifications.search(q, classId, status);
+        if (!SecurityUtils.hasRole("ADMIN")) {
+            Set<Long> ownClasses = accessGuard.teacherClassIds();
+            if (ownClasses.isEmpty()) {
+                return PageResponse.from(Page.<StudentSummary>empty(pageable));
+            }
+            spec = spec.and(StudentSpecifications.inClasses(ownClasses));
+        }
+        Page<Student> page = studentRepository.findAll(spec, pageable);
         return PageResponse.from(page, StudentSummary::from);
     }
 
@@ -69,21 +91,28 @@ public class StudentService {
         return csvExporter.toCsv(students);
     }
 
+    /** The ownership check runs first, so a teacher or student cannot even learn whether an id exists. */
     @Transactional(readOnly = true)
     public StudentResponse get(Long id) {
+        accessGuard.checkCanViewStudent(id);
         return StudentResponse.from(findStudent(id));
     }
 
-    /** Active students of a class, ordered by roll. */
+    /** Active students of a class, ordered by roll. A teacher only for their own classes. */
     @Transactional(readOnly = true)
     public List<StudentSummary> roster(Long classId) {
+        accessGuard.checkCanViewClass(classId);
         if (!schoolClassRepository.existsById(classId)) {
             throw new NotFoundException("Class", classId);
         }
         return studentRepository.findActiveRoster(classId).stream().map(StudentSummary::from).toList();
     }
 
-    /** Admits a new ACTIVE student. request.createAccount() is handled by F14. */
+    /**
+     * Admits a new ACTIVE student. This is the ONLY way to register a student (no self-registration).
+     * With createAccount, a STUDENT login (username = admission no in lower case) is created and linked
+     * in the same transaction: if anything fails, neither the student nor the login is saved.
+     */
     @Transactional
     public CreatedStudentResponse create(StudentRequest request) {
         String admissionNo = normalizeAdmissionNo(request.admissionNo());
@@ -91,18 +120,31 @@ public class StudentService {
             throw new ConflictException("Admission number " + admissionNo + " already exists");
         }
         String email = normalizeEmail(request.email());
+        if (request.createAccount() && email == null) {
+            throw new BusinessRuleException("An email address is required to create a student login");
+        }
         if (email != null && studentRepository.existsByEmail(email)) {
             throw new ConflictException("Email " + email + " is already used by another student");
         }
         Student student = new Student(admissionNo);
         copyDetails(student, request, email);
         place(student, request.classId(), request.rollNo());
+
+        UserService.NewAccount account = null;
+        if (request.createAccount()) {
+            account = userService.createAccount(
+                    admissionNo.toLowerCase(Locale.ROOT), email, student.getFullName(), Role.STUDENT);
+            student.setUser(account.user());
+        }
         Student saved = studentRepository.saveAndFlush(student);
         auditService.record(AUDIT_ADMITTED, ENTITY_TYPE, String.valueOf(saved.getId()),
                 "Admitted " + label(saved) + (saved.getSchoolClass() == null
                         ? " without a class"
-                        : " to " + saved.getSchoolClass().getDisplayName()));
-        return CreatedStudentResponse.from(StudentResponse.from(saved), null);
+                        : " to " + saved.getSchoolClass().getDisplayName())
+                        + (account == null ? "" : " with login " + account.user().getUsername()));
+        // The temporary password is in this response only; it is never stored or shown again.
+        return CreatedStudentResponse.from(StudentResponse.from(saved),
+                account == null ? null : TemporaryPasswordResponse.from(account));
     }
 
     /** Edits details and placement. The admission no in the request is ignored: it never changes. */

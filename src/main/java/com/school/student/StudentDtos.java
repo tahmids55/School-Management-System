@@ -22,7 +22,7 @@ public final class StudentDtos {
     private StudentDtos() {
     }
 
-    /** createAccount is accepted but not used yet: F14 creates the student login. */
+    /** createAccount = true also creates a STUDENT login (email required); only used by POST. */
     public record StudentRequest(
             @NotBlank @Size(max = 20) String admissionNo,
             @NotBlank @Size(max = 60) String firstName,
@@ -121,7 +121,7 @@ public final class StudentDtos {
     public record StatusRequest(@NotNull StudentStatus status) {
     }
 
-    /** account stays null (and out of the JSON) until F14 creates logins. */
+    /** account (username + temporary password, shown once) only when a login was created. */
     public record CreatedStudentResponse(
             StudentResponse student,
             TemporaryPasswordResponse account

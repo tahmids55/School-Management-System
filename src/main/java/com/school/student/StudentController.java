@@ -28,8 +28,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 
 /**
- * All student endpoints are ADMIN only in F13. F14 opens the reads to teachers and students
- * with ownership checks. There is deliberately no DELETE: PATCH /status is the soft delete.
+ * Role checks (RBAC) are here in @PreAuthorize; ownership checks (which student, which class) are in
+ * StudentService via StudentAccessGuard. Export and all writes are ADMIN only, and there is no public
+ * register endpoint: an admin registers students with POST. There is deliberately no DELETE:
+ * PATCH /status is the soft delete.
  */
 @RestController
 @RequestMapping("/api/v1/students")
@@ -44,7 +46,7 @@ public class StudentController {
     }
 
     /** Example: GET /students?q=rahim&classId=3&status=ACTIVE&page=0&size=20&sort=admissionNo */
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
     @GetMapping
     public ResponseEntity<PageResponse<StudentSummary>> search(
             @RequestParam(required = false) String q,
@@ -69,7 +71,8 @@ public class StudentController {
                 .body(csv);
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    /** Any login; the service then allows ADMIN, the student themselves, or a teacher of their class. */
+    @PreAuthorize("isAuthenticated()")
     @GetMapping("/{id}")
     public ResponseEntity<StudentResponse> get(@PathVariable Long id) {
         return ResponseEntity.ok(studentService.get(id));
