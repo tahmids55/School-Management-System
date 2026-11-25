@@ -3,8 +3,13 @@ package com.school.academic;
 import com.school.academic.AcademicDtos.ClassRequest;
 import com.school.academic.AcademicDtos.ClassResponse;
 import com.school.audit.AuditService;
+import com.school.common.SecurityUtils;
 import com.school.common.exception.ConflictException;
 import com.school.common.exception.NotFoundException;
+import com.school.security.AccessGuard;
+import com.school.security.TeachingScope;
+import com.school.teacher.Teacher;
+import com.school.teacher.TeacherRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Classes inside an academic year: name trimmed, section trimmed upper-case,
@@ -25,21 +31,30 @@ public class SchoolClassService {
 
     private final SchoolClassRepository schoolClassRepository;
     private final AcademicYearRepository academicYearRepository;
+    private final TeacherRepository teacherRepository;
+    private final AccessGuard accessGuard;
+    private final TeachingScope teachingScope;
     private final AuditService auditService;
 
     public SchoolClassService(
             SchoolClassRepository schoolClassRepository,
             AcademicYearRepository academicYearRepository,
+            TeacherRepository teacherRepository,
+            AccessGuard accessGuard,
+            TeachingScope teachingScope,
             AuditService auditService
     ) {
         this.schoolClassRepository = schoolClassRepository;
         this.academicYearRepository = academicYearRepository;
+        this.teacherRepository = teacherRepository;
+        this.accessGuard = accessGuard;
+        this.teachingScope = teachingScope;
         this.auditService = auditService;
     }
 
     /**
      * Classes of the chosen year, or of the current year when none is chosen.
-     * No current year gives an empty list. Always at most 3 queries: year, classes (with year), student counts.
+     * Admins see all classes; teachers see only classes they teach or lead.
      */
     @Transactional(readOnly = true)
     public List<ClassResponse> list(Long academicYearId) {
@@ -49,7 +64,17 @@ public class SchoolClassService {
         if (year.isEmpty()) {
             return List.of();
         }
-        List<SchoolClass> classes = schoolClassRepository.findAllByYearWithYear(year.get().getId());
+        List<SchoolClass> classes;
+        if (accessGuard.isAdmin()) {
+            classes = schoolClassRepository.findAllByYearWithYear(year.get().getId());
+        } else {
+            String username = SecurityUtils.currentUsername().orElse(null);
+            Set<Long> allowedIds = teachingScope.accessibleClassIds(username);
+            if (allowedIds.isEmpty()) {
+                return List.of();
+            }
+            classes = schoolClassRepository.findAllByYearAndIdsWithYear(year.get().getId(), allowedIds);
+        }
         if (classes.isEmpty()) {
             return List.of();
         }
@@ -62,6 +87,7 @@ public class SchoolClassService {
     @Transactional(readOnly = true)
     public ClassResponse get(Long id) {
         SchoolClass schoolClass = findClass(id);
+        accessGuard.checkCanManageClass(id);
         return ClassResponse.from(schoolClass, schoolClassRepository.countStudents(id));
     }
 
@@ -73,8 +99,9 @@ public class SchoolClassService {
         if (schoolClassRepository.existsByAcademicYearIdAndNameIgnoreCaseAndSection(year.getId(), name, section)) {
             throw new ConflictException(name + " - " + section + " already exists in " + year.getName());
         }
+        Teacher classTeacher = resolveClassTeacher(request.classTeacherId());
         SchoolClass saved = schoolClassRepository.save(
-                new SchoolClass(year, name, section, normalizeRoom(request.room()), request.capacity()));
+                new SchoolClass(year, name, section, normalizeRoom(request.room()), request.capacity(), classTeacher));
         auditService.record("CLASS_CREATED", ENTITY_TYPE, String.valueOf(saved.getId()),
                 "Created " + saved.getDisplayName() + " in " + year.getName());
         return ClassResponse.from(saved, 0);
@@ -96,15 +123,20 @@ public class SchoolClassService {
         if (request.capacity() < enrolled) {
             throw new ConflictException("Capacity cannot be lower than the " + enrolled + " students already enrolled");
         }
+        Teacher classTeacher = resolveClassTeacher(request.classTeacherId());
         schoolClass.setAcademicYear(year);
         schoolClass.setName(name);
         schoolClass.setSection(section);
         schoolClass.setRoom(normalizeRoom(request.room()));
         schoolClass.setCapacity(request.capacity());
+        schoolClass.setClassTeacher(classTeacher);
         return ClassResponse.from(schoolClassRepository.saveAndFlush(schoolClass), enrolled);
     }
 
-    /** A class with students cannot be deleted. Flushing turns any other foreign-key use into a 409. */
+    /**
+     * A class with active students cannot be deleted. Flushing turns any other foreign-key use
+     * (for example graduated students who keep it as history) into a 409.
+     */
     @Transactional
     public void delete(Long id) {
         SchoolClass schoolClass = findClass(id);
@@ -115,6 +147,14 @@ public class SchoolClassService {
         schoolClassRepository.flush();
         auditService.record("CLASS_DELETED", ENTITY_TYPE, String.valueOf(id),
                 "Deleted " + schoolClass.getDisplayName() + " from " + schoolClass.getAcademicYear().getName());
+    }
+
+    private Teacher resolveClassTeacher(Long classTeacherId) {
+        if (classTeacherId == null) {
+            return null;
+        }
+        return teacherRepository.findById(classTeacherId)
+                .orElseThrow(() -> new NotFoundException("Teacher", classTeacherId));
     }
 
     private Map<Long, Long> studentCounts(List<SchoolClass> classes) {

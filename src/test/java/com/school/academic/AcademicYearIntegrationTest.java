@@ -28,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-class AcademicYearIntegrationTest extends IntegrationTestBase {
+public class AcademicYearIntegrationTest extends IntegrationTestBase {
 
     private static final String URL = "/api/v1/academic-years";
 
@@ -46,7 +46,7 @@ class AcademicYearIntegrationTest extends IntegrationTestBase {
         seedTestUsers(appUserRepository);
     }
 
-    static void seedTestUsers(AppUserRepository appUserRepository) {
+    public static void seedTestUsers(AppUserRepository appUserRepository) {
         for (Role role : Role.values()) {
             String username = role.name().toLowerCase();
             appUserRepository.save(new AppUser(
@@ -59,7 +59,7 @@ class AcademicYearIntegrationTest extends IntegrationTestBase {
         }
     }
 
-    static RequestPostProcessor as(String role) {
+    public static RequestPostProcessor as(String role) {
         return jwt().jwt(token -> token.subject(role.toLowerCase())).authorities(new SimpleGrantedAuthority("ROLE_" + role));
     }
 

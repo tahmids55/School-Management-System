@@ -5,6 +5,8 @@ import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { classKeys, createClass, deleteClass, updateClass, type ClassRequest, type SchoolClass } from '../../api/classes';
 import { errorMessage, fieldErrors } from '../../api/client';
+import { teacherKeys } from '../../api/teachers';
+import { useActiveTeachers } from '../../hooks/useActiveTeachers';
 import { useClasses } from '../../hooks/useClasses';
 import { useYears } from '../../hooks/useYears';
 import { feedback } from '../../utils/feedback';
@@ -25,11 +27,22 @@ export default function ClassesTab() {
   // Until the user picks a year, show the current one.
   const yearId = chosenYearId ?? years.currentYear?.id;
   const classes = useClasses(yearId, yearId !== undefined);
+  const teachers = useActiveTeachers();
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: classKeys.all });
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: classKeys.all }),
+      queryClient.invalidateQueries({ queryKey: teacherKeys.all }),
+    ]);
 
   const save = useMutation({
-    mutationFn: (values: ClassRequest) => (editing ? updateClass(editing.id, values) : createClass(values)),
+    mutationFn: (values: ClassRequest) => {
+      const payload: ClassRequest = {
+        ...values,
+        classTeacherId: values.classTeacherId ?? null,
+      };
+      return editing ? updateClass(editing.id, payload) : createClass(payload);
+    },
     onSuccess: (saved) => {
       feedback.message.success(`${saved.displayName} saved`);
       setEditing(undefined);
@@ -95,6 +108,23 @@ export default function ClassesTab() {
     value: year.id,
     label: year.current ? `${year.name} (Current)` : year.name,
   }));
+  const teacherOptions = (teachers.data ?? []).map((teacher) => ({
+    value: teacher.id,
+    label: `${teacher.fullName} (${teacher.employeeNo})`,
+  }));
+  if (
+    editing?.classTeacherId &&
+    editing.classTeacherName &&
+    !teacherOptions.some((option) => option.value === editing.classTeacherId)
+  ) {
+    teacherOptions.unshift({
+      value: editing.classTeacherId,
+      label: editing.classTeacherName,
+    });
+  }
+  const activeOpenClass = openClass
+    ? classes.data?.find((item) => item.id === openClass.id) ?? openClass
+    : undefined;
   const error = years.error ?? classes.error;
 
   let body;
@@ -174,10 +204,20 @@ export default function ClassesTab() {
               <InputNumber min={1} max={200} precision={0} />
             </Form.Item>
           </Space>
+          <Form.Item name="classTeacherId" label="Class teacher">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="Not set"
+              loading={teachers.isLoading}
+              options={teacherOptions}
+            />
+          </Form.Item>
         </Form>
       </Modal>
 
-      <ClassDetailDrawer schoolClass={openClass} onClose={() => setOpenClass(undefined)} />
+      <ClassDetailDrawer schoolClass={activeOpenClass} onClose={() => setOpenClass(undefined)} />
     </Card>
   );
 }

@@ -24,6 +24,7 @@ export default function ClassDetailDrawer({ schoolClass, onClose }: Props) {
           <Descriptions size="small" column={{ xs: 1, sm: 2 }} style={{ marginBottom: 16 }}>
             <Descriptions.Item label="Academic year">{schoolClass.academicYearName}</Descriptions.Item>
             <Descriptions.Item label="Room">{schoolClass.room || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Class teacher">{schoolClass.classTeacherName || 'Not set'}</Descriptions.Item>
             <Descriptions.Item label="Students">{schoolClass.studentCount}</Descriptions.Item>
             <Descriptions.Item label="Capacity">{schoolClass.capacity}</Descriptions.Item>
           </Descriptions>

@@ -28,11 +28,14 @@ class SubjectServiceTest {
     @Mock
     private SubjectRepository repository;
 
+    @Mock
+    private ClassSubjectRepository classSubjectRepository;
+
     private SubjectService service;
 
     @BeforeEach
     void setUp() {
-        service = new SubjectService(repository);
+        service = new SubjectService(repository, classSubjectRepository);
     }
 
     private static Subject subject(long id, String code) {
@@ -125,11 +128,24 @@ class SubjectServiceTest {
     void delete_deletesAndFlushes() {
         Subject existing = subject(1, "PHY101");
         when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(classSubjectRepository.existsBySubjectId(1L)).thenReturn(false);
 
         service.delete(1L);
 
         verify(repository).delete(existing);
         verify(repository).flush();
+    }
+
+    @Test
+    void delete_assignedToClass_is409WithExactMessage() {
+        Subject existing = subject(1, "PHY101");
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(classSubjectRepository.existsBySubjectId(1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.delete(1L))
+                .isInstanceOf(ConflictException.class)
+                .hasMessage("Subject PHY101 is assigned to classes and cannot be deleted");
+        verify(repository, never()).delete(any());
     }
 
     @Test
