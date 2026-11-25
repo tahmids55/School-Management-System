@@ -203,6 +203,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return problemResponse(HttpStatus.FORBIDDEN, ACCESS_DENIED_DETAIL);
     }
 
+    /** Ownership checks: unlike AccessDeniedException, the message is written by us and safe to show. */
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ProblemDetail> handleForbidden(ForbiddenException ex) {
+        return problemResponse(HttpStatus.FORBIDDEN, ex.getMessage());
+    }
+
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ProblemDetail> handleNotFound(NotFoundException ex) {
         return problemResponse(HttpStatus.NOT_FOUND, ex.getMessage());

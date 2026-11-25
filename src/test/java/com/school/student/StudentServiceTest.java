@@ -4,8 +4,11 @@ import com.school.academic.AcademicYear;
 import com.school.academic.SchoolClass;
 import com.school.academic.SchoolClassRepository;
 import com.school.audit.AuditService;
+import com.school.common.exception.BusinessRuleException;
 import com.school.common.exception.ConflictException;
+import com.school.common.exception.ForbiddenException;
 import com.school.common.exception.NotFoundException;
+import com.school.security.StudentAccessGuard;
 import com.school.student.StudentDtos.CreatedStudentResponse;
 import com.school.student.StudentDtos.StatusRequest;
 import com.school.student.StudentDtos.StudentRequest;
@@ -13,16 +16,25 @@ import com.school.student.StudentDtos.StudentResponse;
 import com.school.user.AppUser;
 import com.school.user.Role;
 import com.school.user.UserService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -31,6 +43,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -51,6 +64,9 @@ class StudentServiceTest {
     @Mock
     private AuditService auditService;
 
+    @Mock
+    private StudentAccessGuard accessGuard;
+
     private StudentService service;
 
     private SchoolClass class6A;
@@ -58,7 +74,7 @@ class StudentServiceTest {
     @BeforeEach
     void setUp() {
         service = new StudentService(studentRepository, classRepository, userService, auditService,
-                new StudentCsvExporter());
+                new StudentCsvExporter(), accessGuard);
         AcademicYear year = new AcademicYear("2026", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31));
         class6A = schoolClass(10L, "Class 6", "A", 40);
         class6A.setAcademicYear(year);
@@ -206,6 +222,109 @@ class StudentServiceTest {
                 .isInstanceOf(ConflictException.class)
                 .hasMessage("Roll number 2 is already taken in Class 6 - A");
         verify(studentRepository, never()).findMaxRollNo(anyLong());
+    }
+
+    // ---------- student login (F14) ----------
+
+    private static StudentRequest withLogin(String admissionNo, String email) {
+        StudentRequest r = request(admissionNo, email, null, null);
+        return new StudentRequest(r.admissionNo(), r.firstName(), r.lastName(), r.gender(), r.dateOfBirth(),
+                r.email(), r.phone(), r.address(), r.guardianName(), r.guardianPhone(), r.guardianRelation(),
+                r.classId(), r.rollNo(), r.admissionDate(), true);
+    }
+
+    @Test
+    void create_withAccount_createsALinkedStudentLogin_andReturnsThePasswordOnce() {
+        AppUser login = new AppUser("adm-2026-101", "rahim@school.edu", "hash", "Rahim Uddin", Role.STUDENT);
+        when(userService.createAccount("adm-2026-101", "rahim@school.edu", "Rahim Uddin", Role.STUDENT))
+                .thenReturn(new UserService.NewAccount(login, "Tmp7xyzAbc23"));
+        savesAndGivesId();
+
+        CreatedStudentResponse created = service.create(withLogin("Adm-2026-101", "Rahim@School.edu"));
+
+        assertThat(created.account().username()).isEqualTo("adm-2026-101");
+        assertThat(created.account().temporaryPassword()).isEqualTo("Tmp7xyzAbc23");
+        assertThat(created.student().username()).isEqualTo("adm-2026-101");
+        ArgumentCaptor<Student> saved = ArgumentCaptor.forClass(Student.class);
+        verify(studentRepository).saveAndFlush(saved.capture());
+        assertThat(saved.getValue().getUser()).isSameAs(login);
+        verify(auditService).record(eq(StudentService.AUDIT_ADMITTED), anyString(), anyString(),
+                contains("with login adm-2026-101"));
+    }
+
+    @Test
+    void create_withAccountButNoEmail_is422_andCreatesNothing() {
+        assertThatThrownBy(() -> service.create(withLogin("ADM-1", "")))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessage("An email address is required to create a student login");
+        verifyNoInteractions(userService);
+        verify(studentRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void create_withoutAccount_createsNoLogin() {
+        savesAndGivesId();
+
+        assertThat(service.create(request("ADM-1", "rahim@school.edu", null, null)).account()).isNull();
+        verifyNoInteractions(userService);
+    }
+
+    // ---------- reads with ownership (F14) ----------
+
+    @AfterEach
+    void clearLogin() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private static void loginAs(String role) {
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                role.toLowerCase(), null, List.of(new SimpleGrantedAuthority("ROLE_" + role))));
+    }
+
+    @Test
+    void search_asTeacherWithoutClasses_isEmpty_withoutTouchingTheDatabase() {
+        loginAs("TEACHER");
+        when(accessGuard.teacherClassIds()).thenReturn(Set.of());
+
+        var page = service.search(null, 10L, null, PageRequest.of(0, 20));
+
+        assertThat(page.totalElements()).isZero();
+        assertThat(page.content()).isEmpty();
+        verifyNoInteractions(studentRepository);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void search_asTeacher_queriesWithTheOwnClassFilter_asAdminWithout() {
+        when(studentRepository.findAll(any(Specification.class), any(PageRequest.class)))
+                .thenReturn(Page.empty());
+
+        loginAs("TEACHER");
+        when(accessGuard.teacherClassIds()).thenReturn(Set.of(10L));
+        service.search("rahim", null, null, PageRequest.of(0, 20));
+        verify(accessGuard).teacherClassIds();
+
+        loginAs("ADMIN");
+        service.search("rahim", null, null, PageRequest.of(0, 20));
+        verify(accessGuard).teacherClassIds(); // still only the teacher's call
+    }
+
+    @Test
+    void get_checksOwnershipBeforeLoading() {
+        doThrow(new ForbiddenException("You can only view your own records"))
+                .when(accessGuard).checkCanViewStudent(2L);
+
+        assertThatThrownBy(() -> service.get(2L)).isInstanceOf(ForbiddenException.class);
+        verifyNoInteractions(studentRepository);
+    }
+
+    @Test
+    void roster_checksTheClassBeforeLoading() {
+        doThrow(new ForbiddenException("You can only view students of your own classes"))
+                .when(accessGuard).checkCanViewClass(10L);
+
+        assertThatThrownBy(() -> service.roster(10L)).isInstanceOf(ForbiddenException.class);
+        verifyNoInteractions(studentRepository, classRepository);
     }
 
     // ---------- update ----------

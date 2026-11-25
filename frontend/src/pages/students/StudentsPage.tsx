@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { DownloadOutlined, PlusOutlined } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { errorMessage } from '../../api/client';
+import { useAuth } from '../../auth/AuthContext';
 import {
   exportStudents,
   listStudents,
@@ -26,6 +27,7 @@ const PAGE_SIZE = 20;
 /** /students: search + class/status filters, a server-paged table, CSV export and "Admit student". */
 export default function StudentsPage() {
   const navigate = useNavigate();
+  const isAdmin = useAuth().hasRole('ADMIN');
   const [searchText, setSearchText] = useState('');
   const [q, setQ] = useState('');
   const [classId, setClassId] = useState<number>();
@@ -75,15 +77,19 @@ export default function StudentsPage() {
     <div>
       <PageHeader
         title="Students"
+        subtitle={isAdmin ? undefined : 'Students of your classes'}
         actions={
-          <>
-            <Button icon={<DownloadOutlined />} loading={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
-              Export CSV
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdmitting(true)}>
-              Admit student
-            </Button>
-          </>
+          // Export and admitting are admin-only on the server too; teachers do not see the buttons.
+          isAdmin && (
+            <>
+              <Button icon={<DownloadOutlined />} loading={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
+                Export CSV
+              </Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdmitting(true)}>
+                Admit student
+              </Button>
+            </>
+          )
         }
       />
 
@@ -145,7 +151,17 @@ export default function StudentsPage() {
             loading={students.isFetching}
             scroll={{ x: 'max-content' }}
             locale={{
-              emptyText: <Empty description={filtered ? 'No students match these filters' : 'No students yet'} />,
+              emptyText: (
+                <Empty
+                  description={
+                    filtered
+                      ? 'No students match these filters'
+                      : isAdmin
+                        ? 'No students yet'
+                        : 'No students in your classes yet'
+                  }
+                />
+              ),
             }}
             onRow={(student) => ({
               onClick: () => navigate(`/students/${student.id}`),

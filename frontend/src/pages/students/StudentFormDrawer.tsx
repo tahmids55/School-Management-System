@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Button, Col, DatePicker, Drawer, Form, Input, InputNumber, Row, Select, Space } from 'antd';
+import { Button, Col, DatePicker, Drawer, Form, Input, InputNumber, Row, Select, Space, Switch } from 'antd';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 import { errorMessage, fieldErrors } from '../../api/client';
@@ -12,6 +12,7 @@ import {
   type Student,
   type StudentRequest,
 } from '../../api/students';
+import { showTemporaryPassword } from '../../components/common';
 import { useClasses } from '../../hooks/useClasses';
 import { feedback } from '../../utils/feedback';
 import { toIsoDate } from '../../utils/format';
@@ -44,6 +45,7 @@ export default function StudentFormDrawer({ open, student, onClose, onSaved }: P
   const classes = useClasses();
   const editing = student !== undefined;
   const classId = Form.useWatch('classId', form);
+  const createAccount = Form.useWatch('createAccount', form);
 
   // Fill the form each time the drawer opens.
   useEffect(() => {
@@ -74,7 +76,14 @@ export default function StudentFormDrawer({ open, student, onClose, onSaved }: P
         classId: values.classId ?? null,
         rollNo: values.classId ? (values.rollNo ?? null) : null,
       };
-      return editing ? updateStudent(student.id, request) : createStudent(request).then((created) => created.student);
+      if (editing) return updateStudent(student.id, request);
+      return createStudent({ ...request, createAccount: Boolean(values.createAccount) }).then((created) => {
+        // The server returns the temporary password only in this response: show it now, once.
+        if (created.account) {
+          showTemporaryPassword(created.account.username, created.account.temporaryPassword);
+        }
+        return created.student;
+      });
     },
     onSuccess: (saved) => {
       feedback.message.success(editing ? 'Student updated' : `${saved.fullName} admitted`);
@@ -184,7 +193,16 @@ export default function StudentFormDrawer({ open, student, onClose, onSaved }: P
             </Form.Item>
           </Col>
           <Col xs={24} sm={12}>
-            <Form.Item name="email" label="Email" rules={[{ type: 'email' }, { max: 120 }]}>
+            <Form.Item
+              name="email"
+              label="Email"
+              dependencies={['createAccount']}
+              rules={[
+                { required: Boolean(createAccount), whitespace: true, message: 'An email address is required to create a student login' },
+                { type: 'email' },
+                { max: 120 },
+              ]}
+            >
               <Input type="email" autoComplete="off" />
             </Form.Item>
           </Col>
@@ -225,6 +243,19 @@ export default function StudentFormDrawer({ open, student, onClose, onSaved }: P
               <Input placeholder="+8801..." inputMode="tel" />
             </Form.Item>
           </Col>
+          {/* Only when admitting: an admin is the only one who can create a student login. */}
+          {!editing && (
+            <Col xs={24}>
+              <Form.Item
+                name="createAccount"
+                label="Create student login"
+                valuePropName="checked"
+                extra="Username = admission no. in lower case. The temporary password is shown once."
+              >
+                <Switch />
+              </Form.Item>
+            </Col>
+          )}
         </Row>
       </Form>
     </Drawer>

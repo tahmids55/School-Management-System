@@ -3,7 +3,7 @@ package com.school.student;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.school.IntegrationTestBase;
 import com.school.audit.AuditLogRepository;
-import com.school.user.AppUser;
+import com.school.security.TeachingScope;
 import com.school.user.AppUserRepository;
 import com.school.user.Role;
 import jakarta.persistence.EntityManager;
@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -24,10 +25,12 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static com.school.academic.AcademicYearIntegrationTest.as;
 import static com.school.academic.AcademicYearIntegrationTest.seedTestUsers;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -39,9 +42,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-class StudentIntegrationTest extends IntegrationTestBase {
+/**
+ * Students API (F13 + F14). TeachingScope is F16's: it is mocked here and returns no classes
+ * unless a test says otherwise (deny by default).
+ */
+class StudentApiIntegrationTest extends IntegrationTestBase {
 
     private static final String URL = "/api/v1/students";
+
+    @MockitoBean
+    private TeachingScope teachingScope;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -71,8 +81,12 @@ class StudentIntegrationTest extends IntegrationTestBase {
 
     // ---------- helpers ----------
 
+    private JsonNode json(ResultActions result) throws Exception {
+        return objectMapper.readTree(result.andReturn().getResponse().getContentAsString());
+    }
+
     private long idOf(ResultActions result) throws Exception {
-        JsonNode json = objectMapper.readTree(result.andReturn().getResponse().getContentAsString());
+        JsonNode json = json(result);
         return json.has("student") ? json.get("student").get("id").asLong() : json.get("id").asLong();
     }
 
@@ -96,6 +110,13 @@ class StudentIntegrationTest extends IntegrationTestBase {
         map.put("guardianRelation", "Father");
         map.put("admissionDate", "2026-01-05");
         map.put("classId", classId);
+        return map;
+    }
+
+    private static Map<String, Object> withLogin(String admissionNo, Long classId, String email) {
+        Map<String, Object> map = student(admissionNo, classId);
+        map.put("email", email);
+        map.put("createAccount", true);
         return map;
     }
 
@@ -128,42 +149,111 @@ class StudentIntegrationTest extends IntegrationTestBase {
                 admissionNo, first, last, guardianPhone, classId, roll, status);
     }
 
+    /** A JWT for a real username (AccountStateFilter reloads that user on every request). */
     private static RequestPostProcessor asUser(String username, Role role) {
         return jwt().jwt(token -> token.subject(username))
                 .authorities(new SimpleGrantedAuthority("ROLE_" + role.name()));
     }
 
-    // ---------- admit ----------
+    /** Admits a student with a login and lets them skip the first-login password change. */
+    private long admitWithReadyLogin(String admissionNo, Long classId) throws Exception {
+        long id = admitId(withLogin(admissionNo, classId, admissionNo.toLowerCase() + "@school.edu"));
+        jdbcTemplate.update("UPDATE users SET must_change_password = false WHERE username = ?",
+                admissionNo.toLowerCase());
+        entityManager.flush();
+        entityManager.clear();
+        return id;
+    }
+
+    // ---------- registration by admin ----------
 
     @Test
-    void admit_normalisesValues_andAssignsNextRollNo() throws Exception {
+    void admit_withAccount_returnsTemporaryPasswordOnce_andAssignsNextRollNo() throws Exception {
         long classId = createClass("Class 6", "A", 40);
-        Map<String, Object> first = student(" adm-2026-101 ", classId);
-        first.put("email", "Rahim@School.EDU");
-        first.put("phone", "+8801711111111");
+        admitId(student("ADM-2026-100", classId));
 
-        admit(first)
+        JsonNode created = json(admit(withLogin(" adm-2026-101 ", classId, "Rahim@School.EDU"))
                 .andExpect(status().isCreated())
                 .andExpect(header().exists("Location"))
                 .andExpect(jsonPath("$.student.admissionNo").value("ADM-2026-101"))
-                .andExpect(jsonPath("$.student.fullName").value("Rahim Uddin"))
                 .andExpect(jsonPath("$.student.email").value("rahim@school.edu"))
-                .andExpect(jsonPath("$.student.classId").value(classId))
-                .andExpect(jsonPath("$.student.className").value("Class 6 - A"))
-                .andExpect(jsonPath("$.student.rollNo").value(1))
-                .andExpect(jsonPath("$.student.status").value("ACTIVE"))
-                .andExpect(jsonPath("$.student.address").doesNotExist())
-                .andExpect(jsonPath("$.student.username").doesNotExist())
+                .andExpect(jsonPath("$.student.rollNo").value(2))
+                .andExpect(jsonPath("$.student.username").value("adm-2026-101"))
+                .andExpect(jsonPath("$.account.username").value("adm-2026-101"))
+                .andExpect(jsonPath("$.account.temporaryPassword").isNotEmpty()));
+        long id = created.get("student").get("id").asLong();
+
+        // The login is a STUDENT that must change the password, linked to this record.
+        Map<String, Object> user = jdbcTemplate.queryForMap(
+                "SELECT u.role, u.must_change_password, s.id AS student_id FROM users u"
+                        + " JOIN students s ON s.user_id = u.id WHERE u.username = 'adm-2026-101'");
+        assertThat(user).containsEntry("role", "STUDENT").containsEntry("must_change_password", true)
+                .containsEntry("student_id", id);
+
+        // "Once": no later read returns the password.
+        mockMvc.perform(get(URL + "/" + id).with(as("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value("adm-2026-101"))
+                .andExpect(jsonPath("$.temporaryPassword").doesNotExist())
                 .andExpect(jsonPath("$.account").doesNotExist());
-        admit(student("ADM-2026-102", classId)).andExpect(jsonPath("$.student.rollNo").value(2));
-
-        Map<String, Object> chosenRoll = student("ADM-2026-103", classId);
-        chosenRoll.put("rollNo", 10);
-        admit(chosenRoll).andExpect(jsonPath("$.student.rollNo").value(10));
-        admit(student("ADM-2026-104", classId)).andExpect(jsonPath("$.student.rollNo").value(11));
-
         assertThat(auditLogRepository.findAll()).extracting(entry -> entry.getAction())
-                .contains("STUDENT_ADMITTED");
+                .contains("STUDENT_ADMITTED", "ACCOUNT_CREATED");
+    }
+
+    @Test
+    void newStudentLogin_mustChangeThePasswordFirst() throws Exception {
+        JsonNode created = json(admit(withLogin("ADM-7", null, "adm7@school.edu")).andExpect(status().isCreated()));
+        String password = created.get("account").get("temporaryPassword").asText();
+        long ownId = created.get("student").get("id").asLong();
+
+        JsonNode login = json(mockMvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("username", "adm-7", "password", password))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.role").value("STUDENT"))
+                .andExpect(jsonPath("$.user.mustChangePassword").value(true))
+                .andExpect(jsonPath("$.user.studentId").value(ownId)));
+
+        mockMvc.perform(get(URL + "/" + ownId)
+                        .header("Authorization", "Bearer " + login.get("accessToken").asText()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("Change your temporary password first"));
+    }
+
+    @Test
+    void createAccount_withoutEmail_returns422_andSavesNothing() throws Exception {
+        Map<String, Object> body = withLogin("ADM-1", null, "");
+
+        admit(body)
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.detail").value("An email address is required to create a student login"));
+        body.remove("email");
+        admit(body).andExpect(status().isUnprocessableEntity());
+
+        // Email already used by another account (the admin's): 409, and neither row is written.
+        admit(withLogin("ADM-1", null, "admin@school.edu"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("An account with email admin@school.edu already exists"));
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM students", Long.class)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE username = 'adm-1'", Long.class)).isZero();
+    }
+
+    @Test
+    void onlyAdmin_canRegisterStudents_thereIsNoPublicRegistration() throws Exception {
+        Map<String, Object> body = withLogin("ADM-1", null, "rahim@school.edu");
+
+        mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isUnauthorized());
+        for (String role : new String[] {"TEACHER", "STUDENT"}) {
+            send(post(URL), body, as(role)).andExpect(status().isForbidden());
+        }
+        mockMvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().is4xxClientError());
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM students", Long.class)).isZero();
+
+        admit(body).andExpect(status().isCreated());
     }
 
     @Test
@@ -174,7 +264,8 @@ class StudentIntegrationTest extends IntegrationTestBase {
         admit(body)
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.student.classId").doesNotExist())
-                .andExpect(jsonPath("$.student.rollNo").doesNotExist());
+                .andExpect(jsonPath("$.student.rollNo").doesNotExist())
+                .andExpect(jsonPath("$.account").doesNotExist());
     }
 
     @Test
@@ -322,18 +413,13 @@ class StudentIntegrationTest extends IntegrationTestBase {
     // ---------- soft delete ----------
 
     @Test
-    void deactivating_aStudent_disablesTheirLogin_andKeepsTheRecord() throws Exception {
+    void deactivating_aStudent_disablesTheirLogin() throws Exception {
         long classId = createClass("Class 6", "A", 40);
-        long id = admitId(student("ADM-9", classId));
-        AppUser login = appUserRepository.save(
-                new AppUser("adm-9", "adm-9@school.edu", "$2a$12$testHashPlaceholder", "Rahim Uddin", Role.STUDENT));
-        jdbcTemplate.update("UPDATE students SET user_id = ? WHERE id = ?", login.getId(), id);
-        entityManager.flush();
-        entityManager.clear();
+        long id = admitWithReadyLogin("ADM-9", classId);
 
-        // The linked login sees its student id in /auth/me (StudentProfileLookup).
+        // Before: the student can log in and read their own profile.
+        mockMvc.perform(get(URL + "/" + id).with(asUser("adm-9", Role.STUDENT))).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/auth/me").with(asUser("adm-9", Role.STUDENT)))
-                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.studentId").value(id));
 
         changeStatus(id, "GRADUATED")
@@ -343,8 +429,8 @@ class StudentIntegrationTest extends IntegrationTestBase {
                 .andExpect(jsonPath("$.className").value("Class 6 - A"));
 
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT enabled FROM users WHERE id = ?", Boolean.class, login.getId())).isFalse();
-        mockMvc.perform(get("/api/v1/auth/me").with(asUser("adm-9", Role.STUDENT)))
+                "SELECT enabled FROM users WHERE username = 'adm-9'", Boolean.class)).isFalse();
+        mockMvc.perform(get(URL + "/" + id).with(asUser("adm-9", Role.STUDENT)))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get(URL + "/" + id).with(as("ADMIN")))
                 .andExpect(status().isOk())
@@ -362,10 +448,103 @@ class StudentIntegrationTest extends IntegrationTestBase {
         changeStatus(999999, "ACTIVE").andExpect(status().isNotFound());
     }
 
+    // ---------- ownership: students ----------
+
+    @Test
+    void student_canSeeOwnProfile_butNotSomeoneElses() throws Exception {
+        long classId = createClass("Class 6", "A", 40);
+        long own = admitWithReadyLogin("ADM-1", classId);
+        long other = admitId(student("ADM-2", classId));
+
+        mockMvc.perform(get(URL + "/" + own).with(asUser("adm-1", Role.STUDENT)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.admissionNo").value("ADM-1"));
+        mockMvc.perform(get(URL + "/" + other).with(asUser("adm-1", Role.STUDENT)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("You can only view your own records"));
+        // An id that does not exist looks the same as someone else's: no probing.
+        mockMvc.perform(get(URL + "/999999").with(asUser("adm-1", Role.STUDENT)))
+                .andExpect(status().isForbidden());
+
+        // A STUDENT login without a student record.
+        mockMvc.perform(get(URL + "/" + own).with(as("STUDENT")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("No student profile is linked to this account"));
+
+        // Lists, roster, export and writes are not for students.
+        mockMvc.perform(get(URL).with(asUser("adm-1", Role.STUDENT))).andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/classes/" + classId + "/students").with(asUser("adm-1", Role.STUDENT)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(URL + "/export").with(asUser("adm-1", Role.STUDENT))).andExpect(status().isForbidden());
+        send(put(URL + "/" + own), student("ADM-1", classId), asUser("adm-1", Role.STUDENT))
+                .andExpect(status().isForbidden());
+        send(patch(URL + "/" + own + "/status"), Map.of("status", "ACTIVE"), asUser("adm-1", Role.STUDENT))
+                .andExpect(status().isForbidden());
+    }
+
+    // ---------- ownership: teachers ----------
+
+    @Test
+    void teacher_seesOnlyStudentsOfOwnClasses() throws Exception {
+        long own = createClass("Class 6", "A", 40);
+        long other = createClass("Class 7", "A", 40);
+        insert("ADM-1", "Own", "Pupil", "01711111111", own, 1, "ACTIVE");
+        insert("ADM-2", "Other", "Pupil", "01711111111", other, 1, "ACTIVE");
+        insert("ADM-3", "No", "Class", "01711111111", null, null, "ACTIVE");
+        Long ownStudent = jdbcTemplate.queryForObject("SELECT id FROM students WHERE admission_no = 'ADM-1'", Long.class);
+        Long otherStudent = jdbcTemplate.queryForObject("SELECT id FROM students WHERE admission_no = 'ADM-2'", Long.class);
+        Long noClass = jdbcTemplate.queryForObject("SELECT id FROM students WHERE admission_no = 'ADM-3'", Long.class);
+        when(teachingScope.accessibleClassIds("teacher")).thenReturn(Set.of(own));
+
+        mockMvc.perform(get(URL).with(as("TEACHER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].admissionNo").value("ADM-1"));
+        // Asking for another class does not escape the filter.
+        mockMvc.perform(get(URL).param("classId", String.valueOf(other)).with(as("TEACHER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(0));
+
+        mockMvc.perform(get(URL + "/" + ownStudent).with(as("TEACHER"))).andExpect(status().isOk());
+        mockMvc.perform(get(URL + "/" + otherStudent).with(as("TEACHER")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("You can only view students of your own classes"));
+        mockMvc.perform(get(URL + "/" + noClass).with(as("TEACHER"))).andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/v1/classes/" + own + "/students").with(as("TEACHER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+        mockMvc.perform(get("/api/v1/classes/" + other + "/students").with(as("TEACHER")))
+                .andExpect(status().isForbidden());
+
+        // Export and writes stay ADMIN, even for the teacher's own students.
+        mockMvc.perform(get(URL + "/export").with(as("TEACHER"))).andExpect(status().isForbidden());
+        send(put(URL + "/" + ownStudent), student("ADM-1", own), as("TEACHER")).andExpect(status().isForbidden());
+        send(patch(URL + "/" + ownStudent + "/status"), Map.of("status", "INACTIVE"), as("TEACHER"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void teacher_withoutClasses_getsAnEmptyList_and403OnProfileAndRoster() throws Exception {
+        long classId = createClass("Class 6", "A", 40);
+        long id = admitId(student("ADM-1", classId));
+        // teachingScope is a mock without stubbing: it returns an empty set, like the fallback bean.
+
+        mockMvc.perform(get(URL).with(as("TEACHER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(0))
+                .andExpect(jsonPath("$.content.length()").value(0));
+        mockMvc.perform(get(URL).param("classId", String.valueOf(classId)).with(as("TEACHER")))
+                .andExpect(jsonPath("$.totalElements").value(0));
+        mockMvc.perform(get(URL + "/" + id).with(as("TEACHER"))).andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/classes/" + classId + "/students").with(as("TEACHER")))
+                .andExpect(status().isForbidden());
+    }
+
     // ---------- search ----------
 
     @Test
-    void search_filtersByTextClassAndStatus_andPaginates() throws Exception {
+    void search_filtersByClassAndPaginates() throws Exception {
         long classA = createClass("Class 6", "A", 40);
         long classB = createClass("Class 7", "A", 40);
         insert("ADM-003", "Nusrat", "Jahan", "01811111111", classA, 1, "ACTIVE");
@@ -491,7 +670,7 @@ class StudentIntegrationTest extends IntegrationTestBase {
     // ---------- export ----------
 
     @Test
-    void export_returnsCsv_withFiltersAndFormulaDefence() throws Exception {
+    void export_returnsCsv() throws Exception {
         long classId = createClass("Class 6", "A", 40);
         Map<String, Object> risky = student("ADM-2", classId);
         risky.put("firstName", "=HYPERLINK(\"http://x\")");
@@ -520,7 +699,7 @@ class StudentIntegrationTest extends IntegrationTestBase {
     // ---------- roles ----------
 
     @Test
-    void everyEndpoint_adminAllowed_teacherAndStudentDenied_anonymousUnauthorized() throws Exception {
+    void roleMatrix_adminEverything_teacherAndStudentLimited_anonymousUnauthorized() throws Exception {
         long classId = createClass("Class 6", "A", 40);
         long id = admitId(student("ADM-1", classId));
 
@@ -530,10 +709,13 @@ class StudentIntegrationTest extends IntegrationTestBase {
         mockMvc.perform(get("/api/v1/classes/" + classId + "/students").with(as("ADMIN")))
                 .andExpect(status().isOk());
 
+        // TEACHER may call search (filtered); STUDENT may not.
+        mockMvc.perform(get(URL).with(as("TEACHER"))).andExpect(status().isOk());
+        mockMvc.perform(get(URL).with(as("STUDENT")))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+
         for (String role : new String[] {"TEACHER", "STUDENT"}) {
-            mockMvc.perform(get(URL).with(as(role)))
-                    .andExpect(status().isForbidden())
-                    .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
             mockMvc.perform(get(URL + "/export").with(as(role))).andExpect(status().isForbidden());
             mockMvc.perform(get(URL + "/" + id).with(as(role))).andExpect(status().isForbidden());
             mockMvc.perform(get("/api/v1/classes/" + classId + "/students").with(as(role)))
@@ -548,9 +730,6 @@ class StudentIntegrationTest extends IntegrationTestBase {
         mockMvc.perform(get(URL + "/export")).andExpect(status().isUnauthorized());
         mockMvc.perform(get(URL + "/" + id)).andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v1/classes/" + classId + "/students")).andExpect(status().isUnauthorized());
-        mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(student("ADM-X", null))))
-                .andExpect(status().isUnauthorized());
 
         // Nothing was changed by the denied calls.
         mockMvc.perform(get(URL + "/" + id).with(as("ADMIN")))

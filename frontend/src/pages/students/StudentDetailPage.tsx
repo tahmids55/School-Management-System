@@ -5,6 +5,7 @@ import { EditOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { errorMessage } from '../../api/client';
+import { useAuth } from '../../auth/AuthContext';
 import { classKeys } from '../../api/classes';
 import {
   changeStudentStatus,
@@ -28,6 +29,7 @@ export default function StudentDetailPage() {
   const id = Number(useParams().id);
   const validId = Number.isInteger(id) && id > 0;
   const queryClient = useQueryClient();
+  const isAdmin = useAuth().hasRole('ADMIN');
   const [editing, setEditing] = useState(false);
 
   const student = useQuery({
@@ -59,8 +61,10 @@ export default function StudentDetailPage() {
     });
   }
 
+  // 403 (not your class) is shown like 404: the page does not reveal that the student exists.
   const notFound =
-    !validId || (axios.isAxiosError(student.error) && student.error.response?.status === 404);
+    !validId ||
+    (axios.isAxiosError(student.error) && [403, 404].includes(student.error.response?.status ?? 0));
   if (notFound) {
     return (
       <Result
@@ -107,17 +111,21 @@ export default function StudentDetailPage() {
         actions={
           <>
             <StatusTag value={s.status} />
-            <Select
-              aria-label="Status"
-              value={s.status}
-              loading={status.isPending}
-              style={{ width: 150 }}
-              options={STUDENT_STATUSES.map((value) => ({ value, label: humanize(value) }))}
-              onChange={(next: StudentStatus) => confirmStatus(s, next)}
-            />
-            <Button icon={<EditOutlined />} onClick={() => setEditing(true)}>
-              Edit
-            </Button>
+            {isAdmin && (
+              <>
+                <Select
+                  aria-label="Status"
+                  value={s.status}
+                  loading={status.isPending}
+                  style={{ width: 150 }}
+                  options={STUDENT_STATUSES.map((value) => ({ value, label: humanize(value) }))}
+                  onChange={(next: StudentStatus) => confirmStatus(s, next)}
+                />
+                <Button icon={<EditOutlined />} onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+              </>
+            )}
           </>
         }
       />

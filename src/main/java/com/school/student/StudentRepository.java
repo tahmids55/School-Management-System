@@ -54,6 +54,14 @@ public interface StudentRepository extends JpaRepository<Student, Long>, JpaSpec
     @Query("select max(s.rollNo) from Student s where s.schoolClass.id = :classId")
     Integer findMaxRollNo(@Param("classId") Long classId);
 
+    /** The class of a student; empty when the student does not exist or has no class. */
+    @Query("select s.schoolClass.id from Student s where s.id = :id")
+    Optional<Long> findClassIdById(@Param("id") Long id);
+
+    /** The student record linked to a login. Usernames are stored lower-case. */
+    @Query("select s from Student s left join fetch s.schoolClass where s.user.username = lower(:username)")
+    Optional<Student> findByUsername(@Param("username") String username);
+
     /** Student profile id of a login, for /auth/me. Usernames are stored lower-case. */
     @Query("select s.id from Student s where s.user.username = lower(:username)")
     Optional<Long> findIdByUsername(@Param("username") String username);
