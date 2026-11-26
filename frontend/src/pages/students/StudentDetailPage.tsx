@@ -17,7 +17,8 @@ import {
 } from '../../api/students';
 import { PageHeader, StatCard, StatusTag } from '../../components/common';
 import { feedback } from '../../utils/feedback';
-import { formatDate, humanize } from '../../utils/format';
+import { useStudentAttendanceThisYear } from '../../hooks/useStudentAttendance';
+import { formatDate, formatPercent, humanize } from '../../utils/format';
 import StudentAttendanceTab from './StudentAttendanceTab';
 import StudentFeesTab from './StudentFeesTab';
 import StudentFormDrawer from './StudentFormDrawer';
@@ -37,6 +38,8 @@ export default function StudentDetailPage() {
     queryFn: () => getStudent(id),
     enabled: validId,
   });
+  // Same cached query as the Attendance tab below (F20).
+  const attendance = useStudentAttendanceThisYear(validId ? id : undefined);
 
   const status = useMutation({
     mutationFn: (next: StudentStatus) => changeStudentStatus(id, next),
@@ -130,13 +133,21 @@ export default function StudentDetailPage() {
         }
       />
 
-      {/* Values come with F20 (attendance) and F21 (fees). */}
+      {/* Attendance from F20; the fees value comes with F21. */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={8}>
-          <StatCard label="Attendance this year" value="-" tint="mint" />
+          <StatCard
+            label="Attendance this year"
+            value={attendance.data ? formatPercent(attendance.data.percentage) : '-'}
+            tint={attendance.data?.low ? 'rose' : 'mint'}
+          />
         </Col>
         <Col xs={24} sm={8}>
-          <StatCard label="Days present / absent" value="- / -" tint="sky" />
+          <StatCard
+            label="Days present / absent"
+            value={attendance.data ? `${attendance.data.present} / ${attendance.data.absent}` : '- / -'}
+            tint="sky"
+          />
         </Col>
         <Col xs={24} sm={8}>
           <StatCard label="Fees outstanding" value="-" tint="peach" />
