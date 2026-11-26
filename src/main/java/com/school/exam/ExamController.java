@@ -2,6 +2,8 @@ package com.school.exam;
 
 import com.school.exam.ExamDtos.ExamRequest;
 import com.school.exam.ExamDtos.ExamResponse;
+import com.school.exam.ExamDtos.MarkSheet;
+import com.school.exam.ExamDtos.MarkSheetRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,9 +25,11 @@ import java.util.List;
 public class ExamController {
 
     private final ExamService examService;
+    private final MarkService markService;
 
-    public ExamController(ExamService examService) {
+    public ExamController(ExamService examService, MarkService markService) {
         this.examService = examService;
+        this.markService = markService;
     }
 
     @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
@@ -57,5 +61,24 @@ public class ExamController {
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         examService.delete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
+    @GetMapping("/{id}/marks")
+    public ResponseEntity<MarkSheet> getMarkSheet(
+            @PathVariable Long id,
+            @RequestParam Long classId,
+            @RequestParam Long subjectId
+    ) {
+        return ResponseEntity.ok(markService.getSheet(id, classId, subjectId));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
+    @PutMapping("/{id}/marks")
+    public ResponseEntity<MarkSheet> saveMarkSheet(
+            @PathVariable Long id,
+            @Valid @RequestBody MarkSheetRequest request
+    ) {
+        return ResponseEntity.ok(markService.saveSheet(id, request));
     }
 }
