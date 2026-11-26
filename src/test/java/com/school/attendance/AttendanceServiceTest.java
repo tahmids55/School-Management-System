@@ -4,12 +4,17 @@ import com.school.academic.AcademicYear;
 import com.school.academic.SchoolClass;
 import com.school.academic.SchoolClassRepository;
 import com.school.attendance.AttendanceDtos.AttendanceSheet;
+import com.school.attendance.AttendanceDtos.ClassReport;
 import com.school.attendance.AttendanceDtos.Entry;
 import com.school.attendance.AttendanceDtos.SaveSheetRequest;
+import com.school.attendance.AttendanceDtos.StudentAttendance;
+import com.school.attendance.AttendanceDtos.StudentSummary;
 import com.school.audit.AuditService;
 import com.school.common.exception.BusinessRuleException;
+import com.school.common.exception.ForbiddenException;
 import com.school.common.exception.NotFoundException;
 import com.school.security.AccessGuard;
+import com.school.security.StudentAccessGuard;
 import com.school.student.Student;
 import com.school.student.StudentRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +26,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -59,6 +65,8 @@ class AttendanceServiceTest {
     @Mock
     private AccessGuard accessGuard;
     @Mock
+    private StudentAccessGuard studentAccessGuard;
+    @Mock
     private AuditService auditService;
 
     private AttendanceService service;
@@ -70,7 +78,7 @@ class AttendanceServiceTest {
     void setUp() {
         service = new AttendanceService(
                 schoolClassRepository, studentRepository, attendanceRecordRepository,
-                accessGuard, auditService, DHAKA_0030);
+                accessGuard, studentAccessGuard, auditService, DHAKA_0030, 75);
 
         AcademicYear year2026 = new AcademicYear("2026", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31));
         class9A = classWithId(10L, year2026);
@@ -205,6 +213,120 @@ class AttendanceServiceTest {
         assertThat(sheet.className()).isEqualTo("Class 9 - A");
         assertThat(sheet.rows()).extracting("studentId").containsExactly(101L, 102L);
         assertThat(sheet.rows()).extracting("status").containsOnlyNulls();
+    }
+
+    // ---------- Reports (F20) ----------
+
+    @Test
+    void classReport_usesGroupedCounts_flagsLow_andIgnoresExcused() {
+        stubClassAndRoster(class9A);
+        LocalDate from = LocalDate.of(2026, 11, 1);
+        when(attendanceRecordRepository.countByStudentAndStatus(10L, from, TODAY)).thenReturn(List.of(
+                // Rahim: 3 present + 1 absent = 75.0 (not low), 5 excused days ignored.
+                new StatusCount(101L, AttendanceStatus.PRESENT, 3L),
+                new StatusCount(101L, AttendanceStatus.ABSENT, 1L),
+                new StatusCount(101L, AttendanceStatus.EXCUSED, 5L),
+                // Karim: 1 late + 2 absent = 33.3 (low).
+                new StatusCount(102L, AttendanceStatus.LATE, 1L),
+                new StatusCount(102L, AttendanceStatus.ABSENT, 2L)));
+        when(attendanceRecordRepository.countDaysTaken(10L, from, TODAY)).thenReturn(9L);
+
+        ClassReport report = service.classReport(10L, from, TODAY);
+
+        assertThat(report.daysTaken()).isEqualTo(9);
+        assertThat(report.lowThreshold()).isEqualTo(75);
+        StudentAttendance rahimLine = report.students().get(0);
+        assertThat(rahimLine.percentage()).isEqualByComparingTo("75.0");
+        assertThat(rahimLine.excused()).isEqualTo(5);
+        assertThat(rahimLine.low()).isFalse();
+        StudentAttendance karimLine = report.students().get(1);
+        assertThat(karimLine.percentage()).isEqualByComparingTo("33.3");
+        assertThat(karimLine.low()).isTrue();
+    }
+
+    @Test
+    void classReport_studentWithoutRecords_is100_andNotLow() {
+        stubClassAndRoster(class9A);
+
+        ClassReport report = service.classReport(10L, TODAY, TODAY);
+
+        assertThat(report.students()).extracting("percentage")
+                .allSatisfy(p -> assertThat((BigDecimal) p).isEqualByComparingTo("100.0"));
+        assertThat(report.students()).extracting("low").containsOnly(false);
+    }
+
+    @Test
+    void classReport_toBeforeFrom_is422() {
+        when(schoolClassRepository.findByIdWithYear(10L)).thenReturn(Optional.of(class9A));
+
+        assertThatThrownBy(() -> service.classReport(10L, TODAY, TODAY.minusDays(1)))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessage("'to' date cannot be before 'from' date");
+        verify(attendanceRecordRepository, never()).countByStudentAndStatus(any(), any(), any());
+    }
+
+    @Test
+    void classReport_teacherOfAnotherClass_isDenied() {
+        doThrow(new AccessDeniedException(AccessGuard.NOT_TEACHING_CLASS_MESSAGE))
+                .when(accessGuard).checkCanManageClass(10L);
+
+        assertThatThrownBy(() -> service.classReport(10L, TODAY, TODAY))
+                .isInstanceOf(AccessDeniedException.class);
+        verify(attendanceRecordRepository, never()).countByStudentAndStatus(any(), any(), any());
+    }
+
+    @Test
+    void studentSummary_countsDays_newestFirst() {
+        when(studentRepository.findById(101L)).thenReturn(Optional.of(rahim));
+        LocalDate from = LocalDate.of(2026, 1, 1);
+        when(attendanceRecordRepository.findByStudentIdAndAttendanceDateBetweenOrderByAttendanceDateDesc(
+                101L, from, TODAY)).thenReturn(List.of(
+                new AttendanceRecord(rahim, class9A, TODAY, AttendanceStatus.LATE, "Bus"),
+                new AttendanceRecord(rahim, class9A, TODAY.minusDays(1), AttendanceStatus.ABSENT, null),
+                new AttendanceRecord(rahim, class9A, TODAY.minusDays(2), AttendanceStatus.EXCUSED, null),
+                new AttendanceRecord(rahim, class9A, TODAY.minusDays(3), AttendanceStatus.PRESENT, null)));
+
+        StudentSummary summary = service.studentSummary(101L, from, TODAY);
+
+        verify(studentAccessGuard).checkCanViewStudent(101L);
+        assertThat(summary.present()).isEqualTo(1);
+        assertThat(summary.late()).isEqualTo(1);
+        assertThat(summary.absent()).isEqualTo(1);
+        assertThat(summary.excused()).isEqualTo(1);
+        assertThat(summary.percentage()).isEqualByComparingTo("66.7");
+        assertThat(summary.low()).isTrue();
+        assertThat(summary.records()).extracting("date")
+                .containsExactly(TODAY, TODAY.minusDays(1), TODAY.minusDays(2), TODAY.minusDays(3));
+        assertThat(summary.records().get(0).remarks()).isEqualTo("Bus");
+    }
+
+    @Test
+    void studentSummary_unrelatedTeacher_isDenied_beforeAnythingIsRead() {
+        doThrow(new ForbiddenException(StudentAccessGuard.OWN_CLASSES_ONLY))
+                .when(studentAccessGuard).checkCanViewStudent(101L);
+
+        assertThatThrownBy(() -> service.studentSummary(101L, TODAY, TODAY))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("You can only view students of your own classes");
+        verify(studentRepository, never()).findById(any());
+        verify(attendanceRecordRepository, never())
+                .findByStudentIdAndAttendanceDateBetweenOrderByAttendanceDateDesc(any(), any(), any());
+    }
+
+    @Test
+    void studentSummary_unknownStudent_is404() {
+        when(studentRepository.findById(555L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.studentSummary(555L, TODAY, TODAY))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessage("Student 555 was not found");
+    }
+
+    @Test
+    void studentSummary_toBeforeFrom_is422() {
+        assertThatThrownBy(() -> service.studentSummary(101L, TODAY, TODAY.minusDays(1)))
+                .isInstanceOf(BusinessRuleException.class)
+                .hasMessage("'to' date cannot be before 'from' date");
     }
 
     private void stubClassAndRoster(SchoolClass schoolClass) {

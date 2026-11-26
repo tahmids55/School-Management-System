@@ -106,6 +106,9 @@ function TakeAttendanceTab() {
     onSuccess: (saved) => {
       feedback.message.success('Attendance saved');
       queryClient.setQueryData(attendanceKeys.sheet(saved.classId, saved.date), saved);
+      // Reports and student summaries now show old numbers: fetch them again when next shown.
+      void queryClient.invalidateQueries({ queryKey: [...attendanceKeys.all, 'report'] });
+      void queryClient.invalidateQueries({ queryKey: [...attendanceKeys.all, 'student'] });
     },
     onError: (err) => feedback.message.error(errorMessage(err)),
   });
