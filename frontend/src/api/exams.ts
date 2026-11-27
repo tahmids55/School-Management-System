@@ -59,6 +59,56 @@ export interface MarkSheetRequest {
   entries: MarkEntry[];
 }
 
+export interface SubjectResult {
+  subjectId: number;
+  subjectCode: string;
+  subjectName: string;
+  fullMarks: number;
+  passMarks: number;
+  obtained?: number | null;
+  absent: boolean;
+  letter: string;
+  point: number;
+  passed: boolean;
+}
+
+export interface StudentResultRow {
+  studentId: number;
+  rollNo?: number | null;
+  admissionNo: string;
+  studentName: string;
+  totalObtained: number;
+  totalFullMarks: number;
+  percentage: number;
+  gpa: number;
+  letter: string;
+  passed: boolean;
+  position?: number | null;
+  subjects: SubjectResult[];
+}
+
+export interface ClassResult {
+  examId: number;
+  examName: string;
+  status: ExamStatus;
+  classId: number;
+  className: string;
+  gradingScheme: string;
+  passed: number;
+  failed: number;
+  students: StudentResultRow[];
+}
+
+export interface MyExamResult {
+  examId: number;
+  examName: string;
+  endDate: string;
+  gpa: number;
+  letter: string;
+  passed: boolean;
+  position?: number | null;
+}
+
 export async function listExams(academicYearId?: number): Promise<ExamResponse[]> {
   const { data } = await api.get<ExamResponse[]>('/exams', {
     params: academicYearId ? { academicYearId } : undefined,
@@ -101,5 +151,32 @@ export async function saveMarkSheet(
   request: MarkSheetRequest,
 ): Promise<MarkSheet> {
   const { data } = await api.put<MarkSheet>(`/exams/${examId}/marks`, request);
+  return data;
+}
+
+export async function publishExam(id: number): Promise<ExamResponse> {
+  const { data } = await api.post<ExamResponse>(`/exams/${id}/publish`);
+  return data;
+}
+
+export async function unpublishExam(id: number): Promise<ExamResponse> {
+  const { data } = await api.post<ExamResponse>(`/exams/${id}/unpublish`);
+  return data;
+}
+
+export async function getClassResult(examId: number, classId: number): Promise<ClassResult> {
+  const { data } = await api.get<ClassResult>(`/exams/${examId}/results`, {
+    params: { classId },
+  });
+  return data;
+}
+
+export async function listMyResults(): Promise<MyExamResult[]> {
+  const { data } = await api.get<MyExamResult[]>('/me/results');
+  return data;
+}
+
+export async function getMyExamResult(examId: number): Promise<StudentResultRow> {
+  const { data } = await api.get<StudentResultRow>(`/me/results/${examId}`);
   return data;
 }

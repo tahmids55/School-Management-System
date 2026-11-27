@@ -18,13 +18,15 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, DeleteOutlined, EditOutlined, PlusOutlined, RollbackOutlined } from '@ant-design/icons';
 import { academicKeys, listAcademicYears, type AcademicYear } from '../../api/academics';
 import { errorMessage, fieldErrors } from '../../api/client';
 import {
   createExam,
   deleteExam,
   listExams,
+  publishExam,
+  unpublishExam,
   updateExam,
   type ExamRequest,
   type ExamResponse,
@@ -100,6 +102,32 @@ export default function ExamsPage() {
     onSuccess: () => {
       feedback.message.success('Exam deleted');
       queryClient.invalidateQueries({ queryKey: ['exams'] });
+    },
+    onError: (err) => {
+      feedback.message.error(errorMessage(err));
+    },
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: (id: number) => publishExam(id),
+    onSuccess: () => {
+      feedback.message.success('Results published');
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      queryClient.invalidateQueries({ queryKey: ['mark-sheet'] });
+      queryClient.invalidateQueries({ queryKey: ['class-result'] });
+    },
+    onError: (err) => {
+      feedback.message.error(errorMessage(err));
+    },
+  });
+
+  const unpublishMutation = useMutation({
+    mutationFn: (id: number) => unpublishExam(id),
+    onSuccess: () => {
+      feedback.message.success('Results unpublished');
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      queryClient.invalidateQueries({ queryKey: ['mark-sheet'] });
+      queryClient.invalidateQueries({ queryKey: ['class-result'] });
     },
     onError: (err) => {
       feedback.message.error(errorMessage(err));
@@ -187,12 +215,44 @@ export default function ExamsPage() {
     columns.push({
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 280,
       align: 'right',
       render: (_, record) => {
         const isPublished = record.status === 'PUBLISHED';
         return (
           <Space wrap size={8}>
+            {isPublished ? (
+              <Popconfirm
+                title="Unpublish results?"
+                description="Students will no longer see them."
+                okText="Unpublish"
+                onConfirm={() => unpublishMutation.mutate(record.id)}
+              >
+                <Button
+                  size="small"
+                  icon={<RollbackOutlined />}
+                  loading={unpublishMutation.isPending && unpublishMutation.variables === record.id}
+                >
+                  Unpublish
+                </Button>
+              </Popconfirm>
+            ) : (
+              <Popconfirm
+                title="Publish results?"
+                description="Marks get locked and students are notified."
+                okText="Publish"
+                onConfirm={() => publishMutation.mutate(record.id)}
+              >
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<CheckCircleOutlined />}
+                  loading={publishMutation.isPending && publishMutation.variables === record.id}
+                >
+                  Publish
+                </Button>
+              </Popconfirm>
+            )}
             <Button
               size="small"
               icon={<EditOutlined />}

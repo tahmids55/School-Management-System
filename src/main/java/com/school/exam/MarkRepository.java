@@ -20,4 +20,14 @@ public interface MarkRepository extends JpaRepository<Mark, Long> {
             @Param("subjectId") Long subjectId,
             @Param("studentIds") Collection<Long> studentIds
     );
+
+    @Query("""
+            select m from Mark m
+            where m.exam.id = :examId
+              and m.student.id in :studentIds
+            """)
+    List<Mark> findByExamIdAndStudentIdIn(
+            @Param("examId") Long examId,
+            @Param("studentIds") Collection<Long> studentIds
+    );
 }
