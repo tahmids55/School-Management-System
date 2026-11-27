@@ -1,4 +1,5 @@
 import { api } from './client';
+import { saveBlob } from '../utils/saveBlob';
 
 export type ExamStatus = 'DRAFT' | 'PUBLISHED';
 
@@ -179,4 +180,23 @@ export async function listMyResults(): Promise<MyExamResult[]> {
 export async function getMyExamResult(examId: number): Promise<StudentResultRow> {
   const { data } = await api.get<StudentResultRow>(`/me/results/${examId}`);
   return data;
+}
+
+export type ReportFormat = 'PDF' | 'CSV';
+
+export async function downloadReportCard(
+  examId: number,
+  studentId: number,
+  format: ReportFormat = 'PDF',
+): Promise<void> {
+  const response = await api.get<Blob>(`/exams/${examId}/students/${studentId}/report-card`, {
+    params: { format },
+    responseType: 'blob',
+  });
+  const ext = format.toLowerCase();
+  saveBlob(
+    response.data,
+    response.headers['content-disposition'],
+    `report-card-${studentId}-${examId}.${ext}`,
+  );
 }

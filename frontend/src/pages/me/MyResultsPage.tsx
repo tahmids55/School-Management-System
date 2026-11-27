@@ -2,14 +2,18 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Col, Empty, List, Row, Space, Spin, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { DownloadOutlined, FilePdfOutlined } from '@ant-design/icons';
 import { errorMessage } from '../../api/client';
 import {
+  downloadReportCard,
   getMyExamResult,
   listMyResults,
   type MyExamResult,
+  type ReportFormat,
   type SubjectResult,
 } from '../../api/exams';
 import { GradeTag, PageHeader, StatCard } from '../../components/common';
+import { feedback } from '../../utils/feedback';
 import { formatDate } from '../../utils/format';
 
 const { Text } = Typography;
@@ -51,6 +55,19 @@ const subjectColumns: ColumnsType<SubjectResult> = [
 
 export default function MyResultsPage() {
   const [selectedExamId, setSelectedExamId] = useState<number | undefined>(undefined);
+  const [downloadingFormat, setDownloadingFormat] = useState<ReportFormat | null>(null);
+
+  const handleDownload = async (studentId: number, format: ReportFormat) => {
+    if (!selectedExamId) return;
+    setDownloadingFormat(format);
+    try {
+      await downloadReportCard(selectedExamId, studentId, format);
+    } catch (err) {
+      feedback.message.error(errorMessage(err));
+    } finally {
+      setDownloadingFormat(null);
+    }
+  };
 
   const listQuery = useQuery({
     queryKey: ['my-results'],
@@ -172,7 +189,30 @@ export default function MyResultsPage() {
                   </Col>
                 </Row>
 
-                <Card styles={{ body: { padding: 0 } }}>
+                <Card
+                  styles={{ body: { padding: 0 } }}
+                  extra={
+                    <Space wrap size={8}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={<FilePdfOutlined />}
+                        loading={downloadingFormat === 'PDF'}
+                        onClick={() => handleDownload(detail.studentId, 'PDF')}
+                      >
+                        Report card (PDF)
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<DownloadOutlined />}
+                        loading={downloadingFormat === 'CSV'}
+                        onClick={() => handleDownload(detail.studentId, 'CSV')}
+                      >
+                        CSV
+                      </Button>
+                    </Space>
+                  }
+                >
                   <Table<SubjectResult>
                     rowKey="subjectId"
                     columns={subjectColumns}
