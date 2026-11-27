@@ -107,7 +107,8 @@ public class FeeInvoice extends BaseEntity {
         }
     }
 
-    public void applyPayment(BigDecimal payment) {
+    /** Validates payable state, positive amount, and remaining balance without mutating state. */
+    public BigDecimal validatePayment(BigDecimal payment) {
         checkPayable();
         if (payment == null || payment.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessRuleException("Payment amount must be positive");
@@ -120,6 +121,11 @@ public class FeeInvoice extends BaseEntity {
                             + " exceeds the outstanding " + remaining.toPlainString()
             );
         }
+        return normalizedPayment;
+    }
+
+    public void applyPayment(BigDecimal payment) {
+        BigDecimal normalizedPayment = validatePayment(payment);
         this.amountPaid = this.amountPaid.add(normalizedPayment);
         this.status = outstanding().compareTo(BigDecimal.ZERO) == 0
                 ? InvoiceStatus.PAID

@@ -111,5 +111,51 @@ export const feeKeys = {
   all: ['fees'] as const,
   list: (search: InvoiceSearch) => ['fees', 'invoices', search] as const,
   student: (studentId: number) => ['fees', 'student', studentId] as const,
+  payments: (invoiceId: number) => ['fees', 'invoices', invoiceId, 'payments'] as const,
   summary: ['fees', 'summary'] as const,
 };
+
+// ---------- Payments and gateways (F22) ----------
+
+export type PaymentMethod = 'CASH' | 'BKASH' | 'BANK_TRANSFER';
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  CASH: 'Cash',
+  BKASH: 'bKash',
+  BANK_TRANSFER: 'Bank transfer',
+};
+
+export interface PaymentRequest {
+  amount: number;
+  method: PaymentMethod;
+  reference?: string;
+}
+
+export interface PaymentResponse {
+  id: number;
+  invoiceId: number;
+  invoiceNo: string;
+  amount: number;
+  method: PaymentMethod;
+  transactionRef: string;
+  paidAt: string;
+  receivedBy: string;
+  invoiceStatus: InvoiceStatus;
+  invoiceOutstanding: number;
+}
+
+export async function listInvoicePayments(invoiceId: number): Promise<PaymentResponse[]> {
+  const { data } = await api.get<PaymentResponse[]>(`/fees/invoices/${invoiceId}/payments`);
+  return data;
+}
+
+export async function recordPayment(
+  invoiceId: number,
+  request: PaymentRequest,
+  idempotencyKey: string,
+): Promise<PaymentResponse> {
+  const { data } = await api.post<PaymentResponse>(`/fees/invoices/${invoiceId}/payments`, request, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+  return data;
+}
