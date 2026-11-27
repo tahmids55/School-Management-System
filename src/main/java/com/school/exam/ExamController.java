@@ -1,5 +1,6 @@
 package com.school.exam;
 
+import com.school.exam.ExamDtos.ClassResult;
 import com.school.exam.ExamDtos.ExamRequest;
 import com.school.exam.ExamDtos.ExamResponse;
 import com.school.exam.ExamDtos.MarkSheet;
@@ -26,10 +27,12 @@ public class ExamController {
 
     private final ExamService examService;
     private final MarkService markService;
+    private final ResultService resultService;
 
-    public ExamController(ExamService examService, MarkService markService) {
+    public ExamController(ExamService examService, MarkService markService, ResultService resultService) {
         this.examService = examService;
         this.markService = markService;
+        this.resultService = resultService;
     }
 
     @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
@@ -80,5 +83,26 @@ public class ExamController {
             @Valid @RequestBody MarkSheetRequest request
     ) {
         return ResponseEntity.ok(markService.saveSheet(id, request));
+    }
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/{id}/publish")
+    public ResponseEntity<ExamResponse> publish(@PathVariable Long id) {
+        return ResponseEntity.ok(resultService.publish(id));
+    }
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/{id}/unpublish")
+    public ResponseEntity<ExamResponse> unpublish(@PathVariable Long id) {
+        return ResponseEntity.ok(resultService.unpublish(id));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'TEACHER')")
+    @GetMapping("/{id}/results")
+    public ResponseEntity<ClassResult> getClassResult(
+            @PathVariable Long id,
+            @RequestParam Long classId
+    ) {
+        return ResponseEntity.ok(resultService.getClassResult(id, classId));
     }
 }
