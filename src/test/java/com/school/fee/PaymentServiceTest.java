@@ -6,6 +6,7 @@ import com.school.common.exception.ConflictException;
 import com.school.common.exception.ForbiddenException;
 import com.school.common.exception.NotFoundException;
 import com.school.common.exception.PaymentFailedException;
+import com.school.fee.FeeDtos.OnlinePaymentRequest;
 import com.school.fee.FeeDtos.PaymentRequest;
 import com.school.fee.FeeDtos.PaymentResponse;
 import com.school.fee.gateway.PaymentGateway;
@@ -323,5 +324,87 @@ class PaymentServiceTest {
         assertThatThrownBy(() -> service.listForInvoice(999L))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessage("Invoice 999 was not found");
+    }
+
+    @Test
+    void recordSelfPayment_forcesBkashAndPaysOwnInvoice() {
+        authenticate("adm-2026-001", "STUDENT");
+        Student amina = new Student("ADM-2026-001");
+        ReflectionTestUtils.setField(amina, "id", 42L);
+        FeeInvoice invoice = sampleInvoice(10L, 42L, "1000.00");
+
+        when(studentAccessGuard.currentStudent()).thenReturn(amina);
+        when(feeInvoiceRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(invoice));
+        when(paymentRepository.findByIdempotencyKeyWithInvoice("self-key-1")).thenReturn(Optional.empty());
+        when(gatewayFactory.get(PaymentMethod.BKASH)).thenReturn(paymentGateway);
+        when(paymentGateway.charge(new ChargeRequest("INV-202611-ABC123", new BigDecimal("500.00"), "self-key-1")))
+                .thenReturn(GatewayResult.ok("BK9876543210"));
+        when(feeInvoiceRepository.saveAndFlush(invoice)).thenReturn(invoice);
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenAnswer(inv -> {
+            Payment saved = inv.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", 91L);
+            ReflectionTestUtils.setField(saved, "createdBy", "adm-2026-001");
+            return saved;
+        });
+
+        PaymentResponse response = service.recordSelfPayment(
+                10L,
+                new OnlinePaymentRequest(new BigDecimal("500.00")),
+                "self-key-1"
+        );
+
+        assertThat(response.id()).isEqualTo(91L);
+        assertThat(response.method()).isEqualTo(PaymentMethod.BKASH);
+        assertThat(response.transactionRef()).isEqualTo("BK9876543210");
+        assertThat(response.receivedBy()).isEqualTo("adm-2026-001");
+        assertThat(response.invoiceStatus()).isEqualTo(InvoiceStatus.PARTIALLY_PAID);
+        assertThat(response.invoiceOutstanding()).isEqualByComparingTo("500.00");
+        verify(gatewayFactory).get(PaymentMethod.BKASH);
+        verify(eventPublisher).publishEvent(any(PaymentReceivedEvent.class));
+    }
+
+    @Test
+    void recordSelfPayment_rejectsOtherStudentsOrMissingInvoice() {
+        Student babul = new Student("ADM-2026-002");
+        ReflectionTestUtils.setField(babul, "id", 99L);
+        FeeInvoice aminaInvoice = sampleInvoice(10L, 42L, "1000.00");
+
+        when(studentAccessGuard.currentStudent()).thenReturn(babul);
+        when(feeInvoiceRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(aminaInvoice));
+        when(feeInvoiceRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.recordSelfPayment(
+                10L,
+                new OnlinePaymentRequest(new BigDecimal("100.00")),
+                "self-other-1"
+        ))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("You can only pay your own invoices");
+
+        assertThatThrownBy(() -> service.recordSelfPayment(
+                999L,
+                new OnlinePaymentRequest(new BigDecimal("100.00")),
+                "self-missing-1"
+        ))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("You can only pay your own invoices");
+
+        verifyNoInteractions(gatewayFactory, paymentGateway, auditService, eventPublisher);
+        verify(paymentRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void recordSelfPayment_propagatesNoProfileForbidden() {
+        when(studentAccessGuard.currentStudent()).thenThrow(new ForbiddenException(StudentAccessGuard.NO_PROFILE));
+
+        assertThatThrownBy(() -> service.recordSelfPayment(
+                10L,
+                new OnlinePaymentRequest(new BigDecimal("100.00")),
+                "self-noprofile"
+        ))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage(StudentAccessGuard.NO_PROFILE);
+
+        verifyNoInteractions(paymentRepository, feeInvoiceRepository, gatewayFactory, auditService, eventPublisher);
     }
 }

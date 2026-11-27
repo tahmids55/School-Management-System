@@ -88,4 +88,58 @@ public final class ExamDtos {
             @NotEmpty @Valid List<MarkEntry> entries
     ) {
     }
+
+    public record SubjectResult(
+            Long subjectId,
+            String subjectCode,
+            String subjectName,
+            int fullMarks,
+            int passMarks,
+            BigDecimal obtained,
+            boolean absent,
+            String letter,
+            BigDecimal point,
+            boolean passed
+    ) {
+    }
+
+    public record StudentResultRow(
+            Long studentId,
+            Integer rollNo,
+            String admissionNo,
+            String studentName,
+            BigDecimal totalObtained,
+            int totalFullMarks,
+            BigDecimal percentage,
+            BigDecimal gpa,
+            String letter,
+            boolean passed,
+            Integer position,
+            List<SubjectResult> subjects
+    ) {
+    }
+
+    public record ClassResult(
+            Long examId,
+            String examName,
+            ExamStatus status,
+            Long classId,
+            String className,
+            String gradingScheme,
+            int passed,
+            int failed,
+            List<StudentResultRow> students
+    ) {
+    }
+
+    public record MyExamResult(
+            Long examId,
+            String examName,
+            LocalDate endDate,
+            BigDecimal gpa,
+            String letter,
+            boolean passed,
+            Integer position
+    ) {
+    }
 }

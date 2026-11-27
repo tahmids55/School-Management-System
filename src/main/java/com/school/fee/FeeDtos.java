@@ -144,6 +144,14 @@ public final class FeeDtos {
     ) {
     }
 
+    public record OnlinePaymentRequest(
+            @NotNull(message = "Amount is required")
+            @DecimalMin(value = "0.01", message = "Amount must be at least 0.01")
+            @Digits(integer = 10, fraction = 2, message = "Amount must have at most 2 decimal places")
+            BigDecimal amount
+    ) {
+    }
+
     public record PaymentResponse(
             Long id,
             Long invoiceId,

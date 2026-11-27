@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: school-management
+    metrics_path: /actuator/prometheus
+    basic_auth:
+      username_file: /run/secrets/metrics_username
+      password_file: /run/secrets/metrics_password
+    static_configs:
+      - targets: ["app:8080"]

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import com.school.common.exception.GlobalExceptionHandler;
 import com.school.security.AccountStateFilter;
+import com.school.security.MonitoringProperties;
 import com.school.security.SecurityProblemWriter;
 import com.school.security.SecurityProperties;
 import com.school.security.TeachingScope;
@@ -12,14 +13,20 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
@@ -47,16 +54,17 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 /**
- * Stateless JWT security filter chain, security headers, BCrypt encoder, and problem+json error handlers.
+ * Stateless JWT security filter chain, Prometheus Basic-auth chain, security headers, and problem+json error handlers.
  */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
-@EnableConfigurationProperties(SecurityProperties.class)
+@EnableConfigurationProperties({SecurityProperties.class, MonitoringProperties.class})
 public class SecurityConfig {
 
     public static final String SESSION_EXPIRED_DETAIL = "Session expired. Please log in again.";
@@ -79,6 +87,56 @@ public class SecurityConfig {
     }
 
     @Bean
+    @Order(1)
+    public SecurityFilterChain prometheusSecurityFilterChain(
+            HttpSecurity http,
+            MonitoringProperties monitoringProperties
+    ) throws Exception {
+        AuthenticationEntryPoint basicEntryPoint = (request, response, authException) -> {
+            response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"monitoring\"");
+            SecurityProblemWriter.write(
+                    objectMapper,
+                    response,
+                    HttpStatus.UNAUTHORIZED,
+                    GlobalExceptionHandler.AUTH_REQUIRED_DETAIL
+            );
+        };
+        AuthenticationManager metricsAuthManager = authentication -> {
+            String username = authentication.getName();
+            String password = authentication.getCredentials() != null
+                    ? authentication.getCredentials().toString()
+                    : null;
+            if (!monitoringProperties.matches(username, password)) {
+                throw new BadCredentialsException("Invalid metrics credentials");
+            }
+            return UsernamePasswordAuthenticationToken.authenticated(
+                    username,
+                    null,
+                    List.of(new SimpleGrantedAuthority("ROLE_METRICS"))
+            );
+        };
+
+        return http
+                .securityMatcher("/actuator/prometheus")
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .csrf(AbstractHttpConfigurer::disable)
+                .formLogin(AbstractHttpConfigurer::disable)
+                .logout(AbstractHttpConfigurer::disable)
+                .authenticationManager(metricsAuthManager)
+                .httpBasic(basic -> basic.authenticationEntryPoint(basicEntryPoint))
+                .exceptionHandling(ex -> ex.authenticationEntryPoint(basicEntryPoint))
+                .authorizeHttpRequests(auth -> {
+                    if (monitoringProperties.isConfigured()) {
+                        auth.anyRequest().authenticated();
+                    } else {
+                        auth.anyRequest().denyAll();
+                    }
+                })
+                .build();
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             JwtDecoder jwtDecoder,

@@ -17,6 +17,18 @@ public interface ExamRepository extends JpaRepository<Exam, Long> {
             """)
     List<Exam> findByAcademicYearIdOrderByStartDateDescIdDesc(@Param("academicYearId") Long academicYearId);
 
+    @Query("""
+            select e from Exam e
+            join fetch e.academicYear
+            where e.academicYear.id = :academicYearId
+              and e.status = :status
+            order by e.endDate desc, e.id desc
+            """)
+    List<Exam> findByAcademicYearIdAndStatusOrderByEndDateDescIdDesc(
+            @Param("academicYearId") Long academicYearId,
+            @Param("status") ExamStatus status
+    );
+
     @Query("select e from Exam e join fetch e.academicYear where e.id = :id")
     Optional<Exam> findByIdWithAcademicYear(@Param("id") Long id);
 
