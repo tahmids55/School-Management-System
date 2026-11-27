@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 import {
@@ -84,7 +85,10 @@ function TakeAttendanceTab() {
   const queryClient = useQueryClient();
   // "Today" is the school's day in Dhaka, not the browser's day.
   const today = schoolToday();
-  const [classId, setClassId] = useState<number | undefined>(undefined);
+  // The dashboard's class cards open this tab with ?classId=, so that class is chosen already.
+  const [searchParams] = useSearchParams();
+  const linkedClassId = Number(searchParams.get('classId')) || undefined;
+  const [classId, setClassId] = useState<number | undefined>(linkedClassId);
   const [date, setDate] = useState<string>(today);
   const [rows, setRows] = useState<DraftRow[]>([]);
 
