@@ -18,7 +18,8 @@ import {
 import { PageHeader, StatCard, StatusTag } from '../../components/common';
 import { feedback } from '../../utils/feedback';
 import { useStudentAttendanceThisYear } from '../../hooks/useStudentAttendance';
-import { formatDate, formatPercent, humanize } from '../../utils/format';
+import { feeKeys, listStudentInvoices } from '../../api/fees';
+import { formatDate, formatMoney, formatPercent, humanize } from '../../utils/format';
 import StudentAttendanceTab from './StudentAttendanceTab';
 import StudentFeesTab from './StudentFeesTab';
 import StudentFormDrawer from './StudentFormDrawer';
@@ -30,7 +31,9 @@ export default function StudentDetailPage() {
   const id = Number(useParams().id);
   const validId = Number.isInteger(id) && id > 0;
   const queryClient = useQueryClient();
-  const isAdmin = useAuth().hasRole('ADMIN');
+  const auth = useAuth();
+  const isAdmin = auth.hasRole('ADMIN');
+  const canViewFees = isAdmin || auth.hasRole('STUDENT');
   const [editing, setEditing] = useState(false);
 
   const student = useQuery({
@@ -40,6 +43,11 @@ export default function StudentDetailPage() {
   });
   // Same cached query as the Attendance tab below (F20).
   const attendance = useStudentAttendanceThisYear(validId ? id : undefined);
+  const fees = useQuery({
+    queryKey: feeKeys.student(id),
+    queryFn: () => listStudentInvoices(id),
+    enabled: validId && canViewFees,
+  });
 
   const status = useMutation({
     mutationFn: (next: StudentStatus) => changeStudentStatus(id, next),
@@ -101,6 +109,11 @@ export default function StudentDetailPage() {
 
   const s = student.data;
   const placement = s.className ? `${s.className}${s.rollNo ? ` · Roll ${s.rollNo}` : ''}` : 'Unassigned';
+  const outstandingTotal = fees.data
+    ? fees.data
+        .filter((inv) => inv.status !== 'CANCELLED')
+        .reduce((sum, inv) => sum + Number(inv.outstanding), 0)
+    : undefined;
 
   return (
     <div>
@@ -150,7 +163,11 @@ export default function StudentDetailPage() {
           />
         </Col>
         <Col xs={24} sm={8}>
-          <StatCard label="Fees outstanding" value="-" tint="peach" />
+          <StatCard
+            label="Fees outstanding"
+            value={canViewFees && outstandingTotal !== undefined ? formatMoney(outstandingTotal) : '-'}
+            tint="peach"
+          />
         </Col>
       </Row>
 
@@ -177,7 +194,9 @@ export default function StudentDetailPage() {
               ),
             },
             { key: 'attendance', label: 'Attendance', children: <StudentAttendanceTab studentId={s.id} /> },
-            { key: 'fees', label: 'Fees', children: <StudentFeesTab studentId={s.id} /> },
+            ...(canViewFees
+              ? [{ key: 'fees', label: 'Fees', children: <StudentFeesTab studentId={s.id} /> }]
+              : []),
           ]}
         />
       </Card>
