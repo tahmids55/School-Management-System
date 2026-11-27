@@ -1,6 +1,7 @@
 package com.school.fee;
 
 import com.school.academic.SchoolClass;
+import com.school.common.SecurityUtils;
 import com.school.student.Student;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
@@ -11,6 +12,7 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
 
 public final class FeeDtos {
@@ -125,6 +127,52 @@ public final class FeeDtos {
             return value == null
                     ? BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY)
                     : value.setScale(2, RoundingMode.HALF_UP);
+        }
+    }
+
+    public record PaymentRequest(
+            @NotNull(message = "Amount is required")
+            @DecimalMin(value = "0.01", message = "Amount must be at least 0.01")
+            @Digits(integer = 10, fraction = 2, message = "Amount must have at most 2 decimal places")
+            BigDecimal amount,
+
+            @NotNull(message = "Payment method is required")
+            PaymentMethod method,
+
+            @Size(max = 80, message = "Reference must be at most 80 characters")
+            String reference
+    ) {
+    }
+
+    public record PaymentResponse(
+            Long id,
+            Long invoiceId,
+            String invoiceNo,
+            BigDecimal amount,
+            PaymentMethod method,
+            String transactionRef,
+            Instant paidAt,
+            String receivedBy,
+            InvoiceStatus invoiceStatus,
+            BigDecimal invoiceOutstanding
+    ) {
+        public static PaymentResponse from(Payment payment) {
+            FeeInvoice invoice = payment.getInvoice();
+            String receivedBy = payment.getCreatedBy() != null
+                    ? payment.getCreatedBy()
+                    : SecurityUtils.currentUsernameOrSystem();
+            return new PaymentResponse(
+                    payment.getId(),
+                    invoice.getId(),
+                    invoice.getInvoiceNo(),
+                    payment.getAmount(),
+                    payment.getMethod(),
+                    payment.getTransactionRef(),
+                    payment.getPaidAt(),
+                    receivedBy,
+                    invoice.getStatus(),
+                    invoice.outstanding()
+            );
         }
     }
 }

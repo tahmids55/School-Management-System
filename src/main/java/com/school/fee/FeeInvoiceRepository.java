@@ -1,11 +1,13 @@
 package com.school.fee;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -24,6 +26,10 @@ public interface FeeInvoiceRepository extends JpaRepository<FeeInvoice, Long>, J
 
     @Query("select i from FeeInvoice i join fetch i.student s left join fetch s.schoolClass where i.id = :id")
     Optional<FeeInvoice> findByIdWithStudentAndClass(@Param("id") Long id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select i from FeeInvoice i where i.id = :id")
+    Optional<FeeInvoice> findByIdForUpdate(@Param("id") Long id);
 
     @Query("select i from FeeInvoice i join fetch i.student s left join fetch s.schoolClass"
             + " where s.id = :studentId order by i.dueDate desc, i.id desc")

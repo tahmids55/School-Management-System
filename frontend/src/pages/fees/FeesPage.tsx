@@ -6,11 +6,13 @@ import {
   Card,
   Col,
   DatePicker,
+  Dropdown,
   Empty,
   Form,
   Input,
   InputNumber,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -19,10 +21,11 @@ import {
   Table,
   Typography,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined } from '@ant-design/icons';
+import { DownOutlined, PlusOutlined } from '@ant-design/icons';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { errorMessage, fieldErrors } from '../../api/client';
+import { errorMessage, fieldErrors, newIdempotencyKey } from '../../api/client';
 import {
   bulkCreateInvoices,
   cancelInvoice,
@@ -30,17 +33,23 @@ import {
   feeKeys,
   getFeeSummary,
   INVOICE_STATUSES,
+  listInvoicePayments,
   listInvoices,
+  PAYMENT_METHOD_LABELS,
+  recordPayment,
   type BulkInvoiceRequest,
   type Invoice,
   type InvoiceRequest,
   type InvoiceStatus,
+  type PaymentMethod,
+  type PaymentRequest,
+  type PaymentResponse,
 } from '../../api/fees';
 import { listStudents } from '../../api/students';
 import { PageHeader, StatCard, StatusTag } from '../../components/common';
 import { useClasses } from '../../hooks/useClasses';
 import { feedback } from '../../utils/feedback';
-import { formatDate, formatMoney, humanize, toIsoDate } from '../../utils/format';
+import { formatDate, formatDateTime, formatMoney, humanize, toIsoDate } from '../../utils/format';
 
 const { Text } = Typography;
 
@@ -61,7 +70,13 @@ interface BulkFormValues {
   dueDate: unknown;
 }
 
-/** /fees (ADMIN): summary cards, invoice search/filters, create (remote student search), bulk invoice, cancel. */
+interface PayFormValues {
+  method: PaymentMethod;
+  amount: number;
+  reference?: string;
+}
+
+/** /fees (ADMIN): summary cards, invoice search/filters, create, bulk invoice, record payment, payment history, cancel. */
 export default function FeesPage() {
   const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
@@ -74,9 +89,15 @@ export default function FeesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [studentQuery, setStudentQuery] = useState('');
+  const [payingInvoice, setPayingInvoice] = useState<Invoice | null>(null);
+  const [attemptKey, setAttemptKey] = useState<string>('');
+  const [payError, setPayError] = useState<string | null>(null);
+  const [historyInvoice, setHistoryInvoice] = useState<Invoice | null>(null);
 
   const [createForm] = Form.useForm<CreateFormValues>();
   const [bulkForm] = Form.useForm<BulkFormValues>();
+  const [payForm] = Form.useForm<PayFormValues>();
+  const watchedMethod = Form.useWatch('method', payForm);
 
   const classes = useClasses();
   const summary = useQuery({
@@ -143,6 +164,50 @@ export default function FeesPage() {
     },
     onError: (error) => feedback.message.error(errorMessage(error)),
   });
+
+  const historyQuery = useQuery({
+    queryKey: feeKeys.payments(historyInvoice?.id ?? 0),
+    queryFn: () => listInvoicePayments(historyInvoice!.id),
+    enabled: historyInvoice !== null,
+  });
+
+  const payMutation = useMutation({
+    mutationFn: ({ invoiceId, request, key }: { invoiceId: number; request: PaymentRequest; key: string }) =>
+      recordPayment(invoiceId, request, key),
+    onSuccess: (recorded) => {
+      feedback.message.success(`Payment recorded (${recorded.transactionRef})`);
+      closePayModal();
+      void queryClient.invalidateQueries({ queryKey: feeKeys.all });
+    },
+    onError: (error) => {
+      // Keep attemptKey unchanged so a retry after network failure or decline reuses the same Idempotency-Key.
+      const fields = fieldErrors(error).filter((f): f is { name: keyof PayFormValues; errors: string[] } =>
+        f.name === 'method' || f.name === 'amount' || f.name === 'reference',
+      );
+      if (fields.length > 0) payForm.setFields(fields);
+      const message = errorMessage(error);
+      setPayError(message);
+      feedback.message.error(message);
+    },
+  });
+
+  function openPayModal(invoice: Invoice) {
+    setPayingInvoice(invoice);
+    setAttemptKey(newIdempotencyKey());
+    setPayError(null);
+    payForm.setFieldsValue({
+      method: 'CASH',
+      amount: Number(invoice.outstanding),
+      reference: undefined,
+    });
+  }
+
+  function closePayModal() {
+    setPayingInvoice(null);
+    setAttemptKey('');
+    setPayError(null);
+    payForm.resetFields();
+  }
 
   function applySearch(value: string) {
     setQ(value.trim());
@@ -217,18 +282,62 @@ export default function FeesPage() {
       title: 'Actions',
       key: 'actions',
       align: 'right',
-      render: (_: unknown, record: Invoice) =>
-        record.amountPaid === 0 && record.status !== 'CANCELLED' ? (
-          <Button
-            size="small"
-            danger
-            loading={cancelMutation.isPending && cancelMutation.variables === record.id}
-            onClick={() => confirmCancel(record)}
-          >
-            Cancel invoice
-          </Button>
-        ) : null,
+      render: (_: unknown, record: Invoice) => {
+        const canPay = record.status === 'UNPAID' || record.status === 'PARTIALLY_PAID';
+        const canCancel = record.amountPaid === 0 && record.status !== 'CANCELLED';
+        const menuItems: MenuProps['items'] = [
+          {
+            key: 'history',
+            label: 'Payment history',
+            onClick: () => setHistoryInvoice(record),
+          },
+          ...(canCancel
+            ? [
+                {
+                  key: 'cancel',
+                  label: 'Cancel invoice',
+                  danger: true,
+                  onClick: () => confirmCancel(record),
+                },
+              ]
+            : []),
+        ];
+        return (
+          <Space size={6}>
+            {canPay && (
+              <Button type="primary" size="small" onClick={() => openPayModal(record)}>
+                Pay
+              </Button>
+            )}
+            <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+              <Button
+                size="small"
+                loading={cancelMutation.isPending && cancelMutation.variables === record.id}
+              >
+                More <DownOutlined />
+              </Button>
+            </Dropdown>
+          </Space>
+        );
+      },
     },
+  ];
+
+  const paymentHistoryColumns: ColumnsType<PaymentResponse> = [
+    { title: 'When', dataIndex: 'paidAt', render: (value: string) => formatDateTime(value) },
+    {
+      title: 'Amount',
+      dataIndex: 'amount',
+      align: 'right',
+      render: (value: number) => formatMoney(value),
+    },
+    {
+      title: 'Method',
+      dataIndex: 'method',
+      render: (value: PaymentMethod) => PAYMENT_METHOD_LABELS[value] ?? humanize(value),
+    },
+    { title: 'Reference', dataIndex: 'transactionRef' },
+    { title: 'By', dataIndex: 'receivedBy' },
   ];
 
   const classOptions = (classes.data ?? []).map((c) => ({ value: c.id, label: c.displayName }));
@@ -519,6 +628,113 @@ export default function FeesPage() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={payingInvoice ? `Record payment - ${payingInvoice.invoiceNo}` : 'Record payment'}
+        open={payingInvoice !== null}
+        onCancel={closePayModal}
+        onOk={() => payForm.submit()}
+        okText="Record payment"
+        confirmLoading={payMutation.isPending}
+        destroyOnClose
+      >
+        {payingInvoice && (
+          <div style={{ marginBottom: 12 }}>
+            <Text type="secondary">
+              {payingInvoice.studentName} ({payingInvoice.admissionNo}) · Outstanding{' '}
+              {formatMoney(payingInvoice.outstanding)}
+            </Text>
+          </div>
+        )}
+        {payError && (
+          <Alert type="error" showIcon message={payError} style={{ marginBottom: 12 }} />
+        )}
+        <Form<PayFormValues>
+          form={payForm}
+          layout="vertical"
+          onFinish={(values) => {
+            if (!payingInvoice) return;
+            setPayError(null);
+            payMutation.mutate({
+              invoiceId: payingInvoice.id,
+              request: {
+                method: values.method,
+                amount: values.amount,
+                reference:
+                  values.method === 'BANK_TRANSFER' && values.reference
+                    ? values.reference.trim()
+                    : undefined,
+              },
+              key: attemptKey,
+            });
+          }}
+        >
+          <Form.Item
+            name="method"
+            label="Method"
+            rules={[{ required: true, message: 'Select a payment method' }]}
+          >
+            <Radio.Group optionType="button" buttonStyle="solid">
+              <Radio.Button value="CASH">Cash</Radio.Button>
+              <Radio.Button value="BKASH">bKash</Radio.Button>
+              <Radio.Button value="BANK_TRANSFER">Bank transfer</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item
+            name="amount"
+            label="Amount (BDT)"
+            rules={[{ required: true, message: 'Enter an amount' }]}
+          >
+            <InputNumber
+              style={{ width: '100%' }}
+              min={0.01}
+              max={payingInvoice ? Number(payingInvoice.outstanding) : undefined}
+              precision={2}
+            />
+          </Form.Item>
+          {watchedMethod === 'BANK_TRANSFER' && (
+            <Form.Item
+              name="reference"
+              label="Bank transaction reference"
+              rules={[
+                { required: true, whitespace: true, message: 'Enter the bank transaction reference' },
+                { max: 80, message: 'Reference must be at most 80 characters' },
+              ]}
+            >
+              <Input placeholder="Bank transaction reference" maxLength={80} />
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+
+      <Modal
+        title={historyInvoice ? `Payments for ${historyInvoice.invoiceNo}` : 'Payment history'}
+        open={historyInvoice !== null}
+        onCancel={() => setHistoryInvoice(null)}
+        footer={null}
+        width={680}
+        destroyOnClose
+      >
+        {historyQuery.isError ? (
+          <Alert
+            type="error"
+            showIcon
+            message={errorMessage(historyQuery.error)}
+            action={<Button onClick={() => void historyQuery.refetch()}>Try again</Button>}
+          />
+        ) : (
+          <Table<PaymentResponse>
+            rowKey="id"
+            size="small"
+            columns={paymentHistoryColumns}
+            dataSource={historyQuery.data ?? []}
+            loading={historyQuery.isLoading || historyQuery.isFetching}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+            locale={{ emptyText: <Empty description="No payments recorded yet" /> }}
+          />
+        )}
       </Modal>
     </div>
   );
