@@ -159,3 +159,20 @@ export async function recordPayment(
   });
   return data;
 }
+
+// ---------- Student online payment (F27) ----------
+
+export interface OnlinePaymentRequest {
+  amount: number;
+}
+
+export async function payOwnInvoice(
+  invoiceId: number,
+  request: OnlinePaymentRequest,
+  idempotencyKey: string,
+): Promise<PaymentResponse> {
+  const { data } = await api.post<PaymentResponse>(`/me/invoices/${invoiceId}/pay`, request, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+  return data;
+}
