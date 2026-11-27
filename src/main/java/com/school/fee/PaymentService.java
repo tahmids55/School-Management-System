@@ -7,6 +7,7 @@ import com.school.common.exception.ConflictException;
 import com.school.common.exception.ForbiddenException;
 import com.school.common.exception.NotFoundException;
 import com.school.common.exception.PaymentFailedException;
+import com.school.fee.FeeDtos.OnlinePaymentRequest;
 import com.school.fee.FeeDtos.PaymentRequest;
 import com.school.fee.FeeDtos.PaymentResponse;
 import com.school.fee.gateway.PaymentGateway;
@@ -46,6 +47,7 @@ public class PaymentService {
     public static final String KEY_TOO_LONG_MESSAGE = "Idempotency-Key is too long (max 80)";
     public static final String KEY_REUSED_DIFFERENT_INVOICE_MESSAGE =
             "This Idempotency-Key was already used for a different invoice";
+    public static final String OWN_INVOICES_PAY_ONLY = "You can only pay your own invoices";
 
     private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 80;
 
@@ -103,12 +105,40 @@ public class PaymentService {
      */
     @Transactional(noRollbackFor = PaymentFailedException.class)
     public PaymentResponse recordPayment(Long invoiceId, PaymentRequest request, String rawIdempotencyKey) {
+        return recordPaymentInternal(invoiceId, request, rawIdempotencyKey, null);
+    }
+
+    /**
+     * Student self-service online payment via bKash sandbox; enforces ownership from the authenticated student.
+     */
+    @Transactional(noRollbackFor = PaymentFailedException.class)
+    public PaymentResponse recordSelfPayment(Long invoiceId, OnlinePaymentRequest request, String rawIdempotencyKey) {
+        Student current = studentAccessGuard.currentStudent();
+        return recordPaymentInternal(
+                invoiceId,
+                new PaymentRequest(request.amount(), PaymentMethod.BKASH, null),
+                rawIdempotencyKey,
+                current.getId()
+        );
+    }
+
+    private PaymentResponse recordPaymentInternal(
+            Long invoiceId,
+            PaymentRequest request,
+            String rawIdempotencyKey,
+            Long requiredStudentId
+    ) {
         String idempotencyKey = normalizeIdempotencyKey(rawIdempotencyKey);
 
         // Lock order: advisory xact lock on key hash -> invoice row FOR UPDATE -> idempotency key lookup.
         paymentRepository.acquireAdvisoryLock(hashKey(idempotencyKey));
         FeeInvoice invoice = feeInvoiceRepository.findByIdForUpdate(invoiceId)
-                .orElseThrow(() -> new NotFoundException("Invoice", invoiceId));
+                .orElseThrow(() -> requiredStudentId != null
+                        ? new ForbiddenException(OWN_INVOICES_PAY_ONLY)
+                        : new NotFoundException("Invoice", invoiceId));
+        if (requiredStudentId != null && !invoice.getStudent().getId().equals(requiredStudentId)) {
+            throw new ForbiddenException(OWN_INVOICES_PAY_ONLY);
+        }
 
         Optional<Payment> existing = paymentRepository.findByIdempotencyKeyWithInvoice(idempotencyKey);
         if (existing.isPresent()) {
