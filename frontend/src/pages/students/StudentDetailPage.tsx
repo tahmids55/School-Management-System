@@ -17,7 +17,9 @@ import {
 } from '../../api/students';
 import { PageHeader, StatCard, StatusTag } from '../../components/common';
 import { feedback } from '../../utils/feedback';
-import { formatDate, humanize } from '../../utils/format';
+import { useStudentAttendanceThisYear } from '../../hooks/useStudentAttendance';
+import { feeKeys, listStudentInvoices } from '../../api/fees';
+import { formatDate, formatMoney, formatPercent, humanize } from '../../utils/format';
 import StudentAttendanceTab from './StudentAttendanceTab';
 import StudentFeesTab from './StudentFeesTab';
 import StudentFormDrawer from './StudentFormDrawer';
@@ -29,13 +31,22 @@ export default function StudentDetailPage() {
   const id = Number(useParams().id);
   const validId = Number.isInteger(id) && id > 0;
   const queryClient = useQueryClient();
-  const isAdmin = useAuth().hasRole('ADMIN');
+  const auth = useAuth();
+  const isAdmin = auth.hasRole('ADMIN');
+  const canViewFees = isAdmin || auth.hasRole('STUDENT');
   const [editing, setEditing] = useState(false);
 
   const student = useQuery({
     queryKey: studentKeys.detail(id),
     queryFn: () => getStudent(id),
     enabled: validId,
+  });
+  // Same cached query as the Attendance tab below (F20).
+  const attendance = useStudentAttendanceThisYear(validId ? id : undefined);
+  const fees = useQuery({
+    queryKey: feeKeys.student(id),
+    queryFn: () => listStudentInvoices(id),
+    enabled: validId && canViewFees,
   });
 
   const status = useMutation({
@@ -98,6 +109,11 @@ export default function StudentDetailPage() {
 
   const s = student.data;
   const placement = s.className ? `${s.className}${s.rollNo ? ` · Roll ${s.rollNo}` : ''}` : 'Unassigned';
+  const outstandingTotal = fees.data
+    ? fees.data
+        .filter((inv) => inv.status !== 'CANCELLED')
+        .reduce((sum, inv) => sum + Number(inv.outstanding), 0)
+    : undefined;
 
   return (
     <div>
@@ -130,16 +146,28 @@ export default function StudentDetailPage() {
         }
       />
 
-      {/* Values come with F20 (attendance) and F21 (fees). */}
+      {/* Attendance from F20; the fees value comes with F21. */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={8}>
-          <StatCard label="Attendance this year" value="-" tint="mint" />
+          <StatCard
+            label="Attendance this year"
+            value={attendance.data ? formatPercent(attendance.data.percentage) : '-'}
+            tint={attendance.data?.low ? 'rose' : 'mint'}
+          />
         </Col>
         <Col xs={24} sm={8}>
-          <StatCard label="Days present / absent" value="- / -" tint="sky" />
+          <StatCard
+            label="Days present / absent"
+            value={attendance.data ? `${attendance.data.present} / ${attendance.data.absent}` : '- / -'}
+            tint="sky"
+          />
         </Col>
         <Col xs={24} sm={8}>
-          <StatCard label="Fees outstanding" value="-" tint="peach" />
+          <StatCard
+            label="Fees outstanding"
+            value={canViewFees && outstandingTotal !== undefined ? formatMoney(outstandingTotal) : '-'}
+            tint="peach"
+          />
         </Col>
       </Row>
 
@@ -166,7 +194,9 @@ export default function StudentDetailPage() {
               ),
             },
             { key: 'attendance', label: 'Attendance', children: <StudentAttendanceTab studentId={s.id} /> },
-            { key: 'fees', label: 'Fees', children: <StudentFeesTab studentId={s.id} /> },
+            ...(canViewFees
+              ? [{ key: 'fees', label: 'Fees', children: <StudentFeesTab studentId={s.id} /> }]
+              : []),
           ]}
         />
       </Card>
