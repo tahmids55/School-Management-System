@@ -3,10 +3,16 @@ import { useAuth } from '../../auth/AuthContext';
 import { PageHeader } from '../../components/common';
 import { formatDate } from '../../utils/format';
 import { schoolToday } from '../../utils/schoolDate';
+import AdminDashboardView from './AdminDashboardView';
+import TeacherDashboardView from './TeacherDashboardView';
 
-/** Placeholder so the shell can be opened. F25 / F31 replace the content with real dashboards. */
+/** One page, one view per role. Each view makes ONE request; the server's facade assembles it. */
 export default function DashboardPage() {
   const { user } = useAuth();
+  if (user?.role === 'ADMIN') return <AdminDashboardView />;
+  if (user?.role === 'TEACHER') return <TeacherDashboardView />;
+
+  // Student dashboard: F31.
   return (
     <>
       <PageHeader title="Dashboard" subtitle={`Welcome, ${user?.fullName ?? ''} · ${formatDate(schoolToday())}`} />
