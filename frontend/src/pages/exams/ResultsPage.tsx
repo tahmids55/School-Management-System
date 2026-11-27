@@ -2,15 +2,19 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Col, Empty, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { DownloadOutlined, FilePdfOutlined } from '@ant-design/icons';
 import { classKeys, listClasses } from '../../api/classes';
 import { errorMessage } from '../../api/client';
 import {
+  downloadReportCard,
   getClassResult,
   listExams,
+  type ReportFormat,
   type StudentResultRow,
   type SubjectResult,
 } from '../../api/exams';
 import { GradeTag, PageHeader, StatCard, StatusTag } from '../../components/common';
+import { feedback } from '../../utils/feedback';
 import { formatPercent } from '../../utils/format';
 
 const { Text } = Typography;
@@ -53,6 +57,20 @@ const subjectColumns: ColumnsType<SubjectResult> = [
 export default function ResultsPage() {
   const [examId, setExamId] = useState<number | undefined>(undefined);
   const [classId, setClassId] = useState<number | undefined>(undefined);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+
+  const handleDownload = async (studentId: number, format: ReportFormat) => {
+    if (!examId) return;
+    const key = `${studentId}-${format}`;
+    setDownloadingKey(key);
+    try {
+      await downloadReportCard(examId, studentId, format);
+    } catch (err) {
+      feedback.message.error(errorMessage(err));
+    } finally {
+      setDownloadingKey(null);
+    }
+  };
 
   const examsQuery = useQuery({
     queryKey: ['exams', 'current'],
@@ -135,6 +153,32 @@ export default function ResultsPage() {
       key: 'letter',
       width: 90,
       render: (letter: string) => <GradeTag grade={letter} />,
+    },
+    {
+      title: 'Report',
+      key: 'report',
+      width: 220,
+      align: 'right',
+      render: (_, row) => (
+        <Space wrap size={6}>
+          <Button
+            size="small"
+            icon={<FilePdfOutlined />}
+            loading={downloadingKey === `${row.studentId}-PDF`}
+            onClick={() => handleDownload(row.studentId, 'PDF')}
+          >
+            PDF report card
+          </Button>
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            loading={downloadingKey === `${row.studentId}-CSV`}
+            onClick={() => handleDownload(row.studentId, 'CSV')}
+          >
+            CSV
+          </Button>
+        </Space>
+      ),
     },
   ];
 

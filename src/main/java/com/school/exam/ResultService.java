@@ -249,8 +249,10 @@ public class ResultService {
 
     /**
      * Computes a class result in 3 queries: subjects of the class, active roster, and all marks for that roster.
+     * Exposed for {@code ReportCardService} after it has enforced its own role/ownership checks.
      */
-    private ClassResult computeClassResult(Exam exam, SchoolClass schoolClass) {
+    @Transactional(readOnly = true)
+    public ClassResult computeClassResult(Exam exam, SchoolClass schoolClass) {
         List<Subject> subjects = classSubjectRepository.findAllByClassIdWithDetails(schoolClass.getId()).stream()
                 .map(ClassSubject::getSubject)
                 .toList();
