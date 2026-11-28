@@ -64,7 +64,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * F25 dashboards through the real API and database, on a clock fixed at 10:00 on 27 Nov 2026 in Dhaka.
+ * F25 and F31 dashboards through the real API and database, on a clock fixed at 10:00 on 27 Nov 2026 in Dhaka.
  * The numbers below are worked out by hand from the seeded rows.
  */
 class DashboardIntegrationTest extends IntegrationTestBase {
@@ -299,9 +299,142 @@ class DashboardIntegrationTest extends IntegrationTestBase {
         mockMvc.perform(get("/api/v1/dashboard/teacher")).andExpect(status().isUnauthorized());
     }
 
+    // ---------------------------------------------------------------- student (F31)
+
+    @Test
+    void studentDashboard_assemblesTheStudentsOwnRealNumbers() throws Exception {
+        School school = seedSchool();
+        // 9-A gets both subjects, so the Half Yearly result of Amina can be calculated.
+        classSubjectRepository.save(new ClassSubject(school.class9A, school.math, school.ayesha));
+        classSubjectRepository.save(new ClassSubject(school.class9A, school.english, school.ayesha));
+        Student amina = findStudent("ADM-2026-001");
+        // An absence in December of last year is before 1 January: not counted.
+        attendanceRecordRepository.save(new AttendanceRecord(
+                amina, school.class9A, LocalDate.of(2025, 12, 30), AttendanceStatus.ABSENT, null));
+        // A cancelled invoice is not owed.
+        FeeInvoice cancelled = new FeeInvoice("INV-202611-CCCCCC", amina, "Trip", new BigDecimal("300"),
+                BigDecimal.ZERO, LocalDate.of(2026, 12, 15));
+        cancelled.cancel();
+        feeInvoiceRepository.saveAndFlush(cancelled);
+        String token = login("adm-2026-001", "StudentPass#1");
+
+        getStudent(token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentName").value("Amina Islam"))
+                .andExpect(jsonPath("$.className").value("Class 9 - A"))
+                .andExpect(jsonPath("$.rollNo").value(1))
+                // this year: present today and yesterday, absent 20 days ago -> 2 / 3 = 66.7, below 75
+                .andExpect(jsonPath("$.attendancePercentage").value(66.7))
+                .andExpect(jsonPath("$.lowAttendance").value(true))
+                .andExpect(jsonPath("$.daysPresent").value(2))
+                .andExpect(jsonPath("$.daysAbsent").value(1))
+                // newest PUBLISHED exam (the draft "Final" is newer but hidden): 85 + 75 -> GPA 4.50, A, 1st
+                .andExpect(jsonPath("$.latestResult.examName").value("Half Yearly"))
+                .andExpect(jsonPath("$.latestResult.gpa").value(4.5))
+                .andExpect(jsonPath("$.latestResult.letter").value("A"))
+                .andExpect(jsonPath("$.latestResult.passed").value(true))
+                .andExpect(jsonPath("$.latestResult.position").value(1))
+                // 1000 billed - 400 paid; the cancelled 300 is left out
+                .andExpect(jsonPath("$.outstandingFees").value(600.00))
+                // ALL (6) + STUDENTS (1) = 7 visible, 5 shown, never the TEACHERS one
+                .andExpect(jsonPath("$.notices.length()").value(5))
+                .andExpect(jsonPath("$.notices[0].title").value("Pinned"))
+                .andExpect(jsonPath("$.notices[?(@.audience == 'TEACHERS')]").isEmpty());
+    }
+
+    @Test
+    void studentWithoutClass_getsADashboardWithoutClassRollAndResult() throws Exception {
+        seedSchool();
+        AppUser login = appUserRepository.save(new AppUser(
+                "adm-2026-009", "rafi@school.edu", passwordEncoder.encode("StudentPass#1"), "Rafi Ahmed",
+                Role.STUDENT));
+        Student rafi = new Student("ADM-2026-009");
+        rafi.setFirstName("Rafi");
+        rafi.setLastName("Ahmed");
+        rafi.setGender(Gender.MALE);
+        rafi.setDateOfBirth(LocalDate.of(2011, 2, 2));
+        rafi.setGuardianName("Parent Rafi");
+        rafi.setGuardianPhone("01700000009");
+        rafi.setGuardianRelation("Mother");
+        rafi.setAdmissionDate(LocalDate.of(2026, 11, 1));
+        rafi.setUser(login);
+        studentRepository.saveAndFlush(rafi);
+        String token = login("adm-2026-009", "StudentPass#1");
+
+        getStudent(token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentName").value("Rafi Ahmed"))
+                .andExpect(jsonPath("$.className").doesNotExist())
+                .andExpect(jsonPath("$.rollNo").doesNotExist())
+                .andExpect(jsonPath("$.latestResult").doesNotExist())
+                // nothing recorded yet = 100.0 and not low (AttendanceMath rule)
+                .andExpect(jsonPath("$.attendancePercentage").value(100.0))
+                .andExpect(jsonPath("$.lowAttendance").value(false))
+                .andExpect(jsonPath("$.daysPresent").value(0))
+                .andExpect(jsonPath("$.daysAbsent").value(0))
+                .andExpect(jsonPath("$.outstandingFees").value(0))
+                .andExpect(jsonPath("$.notices.length()").value(5));
+    }
+
+    @Test
+    void studentDashboard_runsAFixedNumberOfQueries_howeverManyDaysAndInvoices() throws Exception {
+        School school = seedSchool();
+        String token = login("adm-2026-001", "StudentPass#1");
+        long before = countStudentQueries(token);
+
+        Student amina = findStudent("ADM-2026-001");
+        for (int i = 1; i <= 6; i++) {
+            attendanceRecordRepository.save(new AttendanceRecord(
+                    amina, school.class9A, LocalDate.of(2026, 10, i), AttendanceStatus.PRESENT, null));
+            feeInvoiceRepository.save(new FeeInvoice("INV-202611-Y0000" + i, amina, "Fee " + i,
+                    new BigDecimal("100"), BigDecimal.ZERO, LocalDate.of(2026, 12, i)));
+        }
+        long after = countStudentQueries(token);
+
+        assertThat(after).isEqualTo(before);
+    }
+
+    private long countStudentQueries(String token) throws Exception {
+        entityManager.flush();
+        entityManager.clear();
+        Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+        statistics.setStatisticsEnabled(true);
+        statistics.clear();
+        try {
+            getStudent(token).andExpect(status().isOk());
+            return statistics.getPrepareStatementCount();
+        } finally {
+            statistics.setStatisticsEnabled(false);
+        }
+    }
+
+    @Test
+    void studentEndpoint_allowsStudentOnly() throws Exception {
+        seedSchool();
+        String teacherToken = login("t-1001", "TeacherPass#1");
+        String studentToken = login("adm-2026-001", "StudentPass#1");
+        // A STUDENT login that is not linked to any student record.
+        appUserRepository.saveAndFlush(new AppUser(
+                "orphan", "orphan@school.edu", passwordEncoder.encode("StudentPass#1"), "No Profile", Role.STUDENT));
+        String orphanToken = login("orphan", "StudentPass#1");
+
+        getStudent(studentToken).andExpect(status().isOk());
+        getStudent(adminToken).andExpect(status().isForbidden());
+        getStudent(teacherToken).andExpect(status().isForbidden());
+        getStudent(orphanToken).andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/dashboard/student")).andExpect(status().isUnauthorized());
+    }
+
+    private Student findStudent(String admissionNo) {
+        return studentRepository.findAll().stream()
+                .filter(s -> s.getAdmissionNo().equals(admissionNo))
+                .findFirst()
+                .orElseThrow();
+    }
+
     // ---------------------------------------------------------------- data
 
-    private record School(SchoolClass class9A, String aminaInvoiceNo) {
+    private record School(SchoolClass class9A, String aminaInvoiceNo, Teacher ayesha, Subject math, Subject english) {
     }
 
     private School seedSchool() {
@@ -383,7 +516,7 @@ class DashboardIntegrationTest extends IntegrationTestBase {
         noticeRepository.save(new Notice("Pinned", "Body", NoticeAudience.ALL, true,
                 Instant.parse("2026-10-01T04:00:00Z")));
         noticeRepository.flush();
-        return new School(class9A, aminaInvoice.getInvoiceNo());
+        return new School(class9A, aminaInvoice.getInvoiceNo(), ayesha, math, english);
     }
 
     private Teacher teacher(String username, String employeeNo, String firstName, TeacherStatus status) {
@@ -415,6 +548,10 @@ class DashboardIntegrationTest extends IntegrationTestBase {
 
     private ResultActions getAdmin(String token) throws Exception {
         return mockMvc.perform(get("/api/v1/dashboard/admin").header("Authorization", "Bearer " + token));
+    }
+
+    private ResultActions getStudent(String token) throws Exception {
+        return mockMvc.perform(get("/api/v1/dashboard/student").header("Authorization", "Bearer " + token));
     }
 
     private ResultActions getTeacher(String token) throws Exception {

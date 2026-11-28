@@ -1,9 +1,10 @@
 import { api } from './client';
+import type { MyExamResult } from './exams';
 import type { FeeSummary, PaymentMethod } from './fees';
 import type { NoticeResponse } from './notices';
 import type { TeachingLoad } from './teachers';
 
-// Shapes of GET /dashboard/admin and /dashboard/teacher (F25). The server leaves out null values.
+// Shapes of GET /dashboard/admin and /dashboard/teacher (F25) and /dashboard/student (F31). The server leaves out null values.
 
 export interface Counts {
   students: number;
@@ -68,6 +69,23 @@ export interface TeacherDashboard {
   notices: NoticeResponse[];
 }
 
+/** GET /dashboard/student (F31): the logged-in student's own numbers, attendance from 1 January to today. */
+export interface StudentDashboard {
+  studentName: string;
+  /** Missing when the student has no class. */
+  className?: string;
+  rollNo?: number;
+  attendancePercentage: number;
+  lowAttendance: boolean;
+  /** Present + late. */
+  daysPresent: number;
+  daysAbsent: number;
+  /** Missing until a result of the student's class is published. */
+  latestResult?: MyExamResult;
+  outstandingFees: number;
+  notices: NoticeResponse[];
+}
+
 export async function getAdminDashboard(): Promise<AdminDashboard> {
   const { data } = await api.get<AdminDashboard>('/dashboard/admin');
   return data;
@@ -78,8 +96,14 @@ export async function getTeacherDashboard(): Promise<TeacherDashboard> {
   return data;
 }
 
+export async function getStudentDashboard(): Promise<StudentDashboard> {
+  const { data } = await api.get<StudentDashboard>('/dashboard/student');
+  return data;
+}
+
 export const dashboardKeys = {
   all: ['dashboard'] as const,
   admin: ['dashboard', 'admin'] as const,
   teacher: ['dashboard', 'teacher'] as const,
+  student: ['dashboard', 'student'] as const,
 };

@@ -1,6 +1,7 @@
 package com.school.dashboard;
 
 import com.school.dashboard.DashboardDtos.AdminDashboard;
+import com.school.dashboard.DashboardDtos.StudentDashboard;
 import com.school.dashboard.DashboardDtos.TeacherDashboard;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -29,5 +30,12 @@ public class DashboardController {
     @GetMapping("/teacher")
     public ResponseEntity<TeacherDashboard> teacher() {
         return ResponseEntity.ok(dashboardFacade.teacherDashboard());
+    }
+
+    /** The logged-in student's own home; whose data it is comes from the token, never from the URL. */
+    @PreAuthorize("hasRole('STUDENT')")
+    @GetMapping("/student")
+    public ResponseEntity<StudentDashboard> student() {
+        return ResponseEntity.ok(dashboardFacade.studentDashboard());
     }
 }

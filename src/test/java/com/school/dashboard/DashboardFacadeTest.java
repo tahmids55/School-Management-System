@@ -4,21 +4,31 @@ import com.school.academic.AcademicYear;
 import com.school.academic.AcademicYearRepository;
 import com.school.academic.SchoolClassRepository;
 import com.school.academic.SubjectRepository;
+import com.school.academic.SchoolClass;
+import com.school.attendance.AttendanceDtos.StudentSummary;
+import com.school.attendance.AttendanceService;
 import com.school.attendance.AttendanceStatus;
 import com.school.common.PageResponse;
 import com.school.dashboard.DashboardDtos.AdminDashboard;
 import com.school.dashboard.DashboardDtos.MonthAmount;
 import com.school.dashboard.DashboardDtos.NameValue;
+import com.school.dashboard.DashboardDtos.StudentDashboard;
 import com.school.dashboard.DashboardDtos.TeacherDashboard;
 import com.school.dashboard.DashboardDtos.TrendPoint;
 import com.school.exam.Exam;
+import com.school.exam.ExamDtos.MyExamResult;
+import com.school.exam.ResultService;
+import com.school.fee.FeeDtos.InvoiceResponse;
 import com.school.fee.FeeDtos.FeeSummary;
 import com.school.fee.FeeInvoiceService;
+import com.school.fee.InvoiceStatus;
 import com.school.grading.Gpa5GradingStrategy;
 import com.school.grading.GradingStrategyResolver;
 import com.school.notice.NoticeService;
 import com.school.security.AccessGuard;
+import com.school.security.StudentAccessGuard;
 import com.school.student.Gender;
+import com.school.student.Student;
 import com.school.teacher.Teacher;
 import com.school.teacher.TeacherDtos.ClassRef;
 import com.school.teacher.TeacherDtos.SubjectAssignment;
@@ -77,6 +87,12 @@ class DashboardFacadeTest {
     private AccessGuard accessGuard;
     @Mock
     private GradingStrategyResolver gradingStrategyResolver;
+    @Mock
+    private StudentAccessGuard studentAccessGuard;
+    @Mock
+    private AttendanceService attendanceService;
+    @Mock
+    private ResultService resultService;
 
     private DashboardFacade facade;
 
@@ -84,7 +100,7 @@ class DashboardFacadeTest {
     void setUp() {
         facade = new DashboardFacade(dashboardRepository, academicYearRepository, schoolClassRepository,
                 subjectRepository, feeInvoiceService, noticeService, teacherService, accessGuard,
-                gradingStrategyResolver, CLOCK);
+                gradingStrategyResolver, studentAccessGuard, attendanceService, resultService, CLOCK);
         when(feeInvoiceService.summary()).thenReturn(FeeSummary.of(null, null, 0));
         when(noticeService.list(any())).thenReturn(new PageResponse<>(List.of(), 0, 5, 0, 0));
         when(gradingStrategyResolver.active()).thenReturn(new Gpa5GradingStrategy());
@@ -242,5 +258,91 @@ class DashboardFacadeTest {
 
         assertThat(dashboard.classesToday()).isEmpty();
         verifyNoInteractions(schoolClassRepository, dashboardRepository);
+    }
+
+    // ---------------------------------------------------------------- student (F31)
+
+    @Test
+    void studentDashboard_assemblesOwnNumbers_fromYearStartToToday() {
+        Student student = studentMock(5L, "Amina Islam", "Class 9", "A", 1);
+        when(studentAccessGuard.currentStudent()).thenReturn(student);
+        // 1 Jan of the school's year up to today (1 Nov in Dhaka, although it is still 31 Oct in UTC).
+        when(attendanceService.studentSummary(5L, LocalDate.of(2026, 1, 1), TODAY)).thenReturn(
+                new StudentSummary(5L, "Amina Islam", LocalDate.of(2026, 1, 1), TODAY,
+                        5, 3, 1, 2, new BigDecimal("66.7"), true, List.of()));
+        MyExamResult halfYearly = new MyExamResult(8L, "Half Yearly", LocalDate.of(2026, 6, 10),
+                new BigDecimal("4.50"), "A", true, 1);
+        MyExamResult firstTerm = new MyExamResult(7L, "First Term", LocalDate.of(2026, 3, 10),
+                new BigDecimal("3.00"), "B", true, 2);
+        when(resultService.myResults()).thenReturn(List.of(halfYearly, firstTerm));
+        when(feeInvoiceService.listForStudent(5L)).thenReturn(List.of(
+                invoice(InvoiceStatus.PARTIALLY_PAID, "600.00"),
+                invoice(InvoiceStatus.UNPAID, "250.50"),
+                invoice(InvoiceStatus.PAID, "0.00")));
+
+        StudentDashboard dashboard = facade.studentDashboard();
+
+        assertThat(dashboard.studentName()).isEqualTo("Amina Islam");
+        assertThat(dashboard.className()).isEqualTo("Class 9 - A");
+        assertThat(dashboard.rollNo()).isEqualTo(1);
+        assertThat(dashboard.attendancePercentage()).isEqualByComparingTo("66.7");
+        assertThat(dashboard.lowAttendance()).isTrue();
+        // present 5 + late 1; excused 2 is not counted anywhere
+        assertThat(dashboard.daysPresent()).isEqualTo(6);
+        assertThat(dashboard.daysAbsent()).isEqualTo(3);
+        assertThat(dashboard.latestResult()).isEqualTo(halfYearly);
+        assertThat(dashboard.outstandingFees()).isEqualByComparingTo("850.50");
+        assertThat(dashboard.notices()).isEmpty();
+    }
+
+    @Test
+    void studentDashboard_withoutClass_hasNoClassRollOrResult_butStillAttendanceAndFees() {
+        Student student = studentMock(9L, "Rafi Ahmed", null, null, null);
+        when(studentAccessGuard.currentStudent()).thenReturn(student);
+        when(attendanceService.studentSummary(9L, LocalDate.of(2026, 1, 1), TODAY)).thenReturn(
+                new StudentSummary(9L, "Rafi Ahmed", LocalDate.of(2026, 1, 1), TODAY,
+                        0, 0, 0, 0, new BigDecimal("100.0"), false, List.of()));
+        when(resultService.myResults()).thenReturn(List.of());
+        when(feeInvoiceService.listForStudent(9L)).thenReturn(List.of());
+
+        StudentDashboard dashboard = facade.studentDashboard();
+
+        assertThat(dashboard.className()).isNull();
+        assertThat(dashboard.rollNo()).isNull();
+        assertThat(dashboard.latestResult()).isNull();
+        assertThat(dashboard.attendancePercentage()).isEqualByComparingTo("100.0");
+        assertThat(dashboard.lowAttendance()).isFalse();
+        assertThat(dashboard.daysPresent()).isZero();
+        assertThat(dashboard.daysAbsent()).isZero();
+        assertThat(dashboard.outstandingFees()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void outstandingFees_leavesOutCancelledInvoices_andHasTwoDecimals() {
+        BigDecimal outstanding = DashboardFacade.outstandingFees(List.of(
+                invoice(InvoiceStatus.UNPAID, "1000"),
+                invoice(InvoiceStatus.CANCELLED, "700")));
+
+        assertThat(outstanding.toPlainString()).isEqualTo("1000.00");
+        assertThat(DashboardFacade.outstandingFees(List.of()).toPlainString()).isEqualTo("0.00");
+    }
+
+    private static Student studentMock(Long id, String fullName, String className, String section, Integer roll) {
+        Student student = mock(Student.class);
+        when(student.getId()).thenReturn(id);
+        when(student.getFullName()).thenReturn(fullName);
+        when(student.getRollNo()).thenReturn(roll);
+        if (className != null) {
+            SchoolClass schoolClass = mock(SchoolClass.class);
+            when(schoolClass.getDisplayName()).thenReturn(className + " - " + section);
+            when(student.getSchoolClass()).thenReturn(schoolClass);
+        }
+        return student;
+    }
+
+    private static InvoiceResponse invoice(InvoiceStatus status, String outstanding) {
+        return new InvoiceResponse(1L, "INV-1", 5L, "Amina Islam", "ADM-1", "Class 9 - A", "Tuition",
+                new BigDecimal("1000"), BigDecimal.ZERO, new BigDecimal("1000"), BigDecimal.ZERO,
+                new BigDecimal(outstanding), LocalDate.of(2026, 12, 1), status, false);
     }
 }

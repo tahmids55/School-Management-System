@@ -5,7 +5,9 @@ import com.school.academic.AcademicYearRepository;
 import com.school.academic.SchoolClass;
 import com.school.academic.SchoolClassRepository;
 import com.school.academic.SubjectRepository;
+import com.school.attendance.AttendanceDtos.StudentSummary;
 import com.school.attendance.AttendanceMath;
+import com.school.attendance.AttendanceService;
 import com.school.attendance.AttendanceStatus;
 import com.school.dashboard.DashboardDtos.AdminDashboard;
 import com.school.dashboard.DashboardDtos.ClassToday;
@@ -13,10 +15,15 @@ import com.school.dashboard.DashboardDtos.Counts;
 import com.school.dashboard.DashboardDtos.MonthAmount;
 import com.school.dashboard.DashboardDtos.NameValue;
 import com.school.dashboard.DashboardDtos.RecentPayment;
+import com.school.dashboard.DashboardDtos.StudentDashboard;
 import com.school.dashboard.DashboardDtos.TeacherDashboard;
 import com.school.dashboard.DashboardDtos.TrendPoint;
 import com.school.exam.Exam;
+import com.school.exam.ExamDtos.MyExamResult;
+import com.school.exam.ResultService;
+import com.school.fee.FeeDtos.InvoiceResponse;
 import com.school.fee.FeeInvoiceService;
+import com.school.fee.InvoiceStatus;
 import com.school.fee.Payment;
 import com.school.grading.GradingStrategy;
 import com.school.grading.GradingStrategyResolver;
@@ -24,7 +31,9 @@ import com.school.grading.SubjectGrade;
 import com.school.notice.NoticeDtos.NoticeResponse;
 import com.school.notice.NoticeService;
 import com.school.security.AccessGuard;
+import com.school.security.StudentAccessGuard;
 import com.school.student.Gender;
+import com.school.student.Student;
 import com.school.teacher.Teacher;
 import com.school.teacher.TeacherDtos.ClassRef;
 import com.school.teacher.TeacherDtos.SubjectAssignment;
@@ -58,7 +67,8 @@ import java.util.TreeMap;
  * attendance, fees, exams + grading, notices); it only sees {@link #adminDashboard()} and
  * {@link #teacherDashboard()}. Existing services are reused for their rules, and the few new numbers come
  * from fixed, grouped queries in {@link DashboardRepository}.
- * The student part is added by F31.
+ * F31 extends the same facade with {@link #studentDashboard()}: one more method, built only from services
+ * that already exist (attendance, results, fees, notices), so the controller still makes one call.
  */
 @Service
 public class DashboardFacade {
@@ -82,6 +92,9 @@ public class DashboardFacade {
     private final TeacherService teacherService;
     private final AccessGuard accessGuard;
     private final GradingStrategyResolver gradingStrategyResolver;
+    private final StudentAccessGuard studentAccessGuard;
+    private final AttendanceService attendanceService;
+    private final ResultService resultService;
     private final Clock clock;
 
     public DashboardFacade(
@@ -94,6 +107,9 @@ public class DashboardFacade {
             TeacherService teacherService,
             AccessGuard accessGuard,
             GradingStrategyResolver gradingStrategyResolver,
+            StudentAccessGuard studentAccessGuard,
+            AttendanceService attendanceService,
+            ResultService resultService,
             Clock clock
     ) {
         this.dashboardRepository = dashboardRepository;
@@ -105,6 +121,9 @@ public class DashboardFacade {
         this.teacherService = teacherService;
         this.accessGuard = accessGuard;
         this.gradingStrategyResolver = gradingStrategyResolver;
+        this.studentAccessGuard = studentAccessGuard;
+        this.attendanceService = attendanceService;
+        this.resultService = resultService;
         this.clock = clock;
     }
 
@@ -307,6 +326,48 @@ public class DashboardFacade {
                 .sorted(Map.Entry.comparingByValue())
                 .forEach(e -> sorted.put(e.getKey(), e.getValue()));
         return sorted;
+    }
+
+    // ---------------------------------------------------------------- student (F31)
+
+    /**
+     * The logged-in student's home. Each number comes from the module that owns its rule:
+     * attendance % and "low" from AttendanceService (F20), the result from ResultService (F29, published only),
+     * the invoices from FeeInvoiceService (F21). A student without a class still gets a page:
+     * no class name, no roll, no result, but attendance, fees and notices.
+     */
+    @Transactional(readOnly = true)
+    public StudentDashboard studentDashboard() {
+        Student student = studentAccessGuard.currentStudent();
+        LocalDate today = LocalDate.now(clock);
+        LocalDate yearStart = today.withDayOfYear(1);
+
+        StudentSummary attendance = attendanceService.studentSummary(student.getId(), yearStart, today);
+        // myResults() is newest exam first, so the first one is the latest published result.
+        MyExamResult latestResult = resultService.myResults().stream().findFirst().orElse(null);
+        BigDecimal outstanding = outstandingFees(feeInvoiceService.listForStudent(student.getId()));
+
+        return new StudentDashboard(
+                student.getFullName(),
+                student.getSchoolClass() == null ? null : student.getSchoolClass().getDisplayName(),
+                student.getRollNo(),
+                attendance.percentage(),
+                attendance.low(),
+                attendance.present() + attendance.late(),
+                attendance.absent(),
+                latestResult,
+                outstanding,
+                latestNotices()
+        );
+    }
+
+    /** What is still to pay: the sum of every invoice's outstanding amount, cancelled invoices left out. */
+    static BigDecimal outstandingFees(List<InvoiceResponse> invoices) {
+        return invoices.stream()
+                .filter(invoice -> invoice.status() != InvoiceStatus.CANCELLED)
+                .map(InvoiceResponse::outstanding)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
     }
 
     // ---------------------------------------------------------------- shared

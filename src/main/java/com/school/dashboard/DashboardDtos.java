@@ -1,5 +1,6 @@
 package com.school.dashboard;
 
+import com.school.exam.ExamDtos.MyExamResult;
 import com.school.fee.FeeDtos.FeeSummary;
 import com.school.fee.PaymentMethod;
 import com.school.notice.NoticeDtos.NoticeResponse;
@@ -82,6 +83,25 @@ public final class DashboardDtos {
             String teacherName,
             TeachingLoad teachingLoad,
             List<ClassToday> classesToday,
+            List<NoticeResponse> notices
+    ) {
+    }
+
+    /**
+     * The logged-in student's home (F31). Attendance covers 1 January of this year up to today.
+     * className, rollNo and latestResult are null (left out of the JSON) when there is no class or no result.
+     */
+    public record StudentDashboard(
+            String studentName,
+            String className,
+            Integer rollNo,
+            BigDecimal attendancePercentage,
+            boolean lowAttendance,
+            /** present + late: a late student still attended. */
+            long daysPresent,
+            long daysAbsent,
+            MyExamResult latestResult,
+            BigDecimal outstandingFees,
             List<NoticeResponse> notices
     ) {
     }

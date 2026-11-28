@@ -26,14 +26,16 @@ import StudentFormDrawer from './StudentFormDrawer';
 
 const { Text } = Typography;
 
-/** /students/:id: header with status, stat cards, and the tabs Profile | Attendance (F20) | Fees (F21). */
+/** /students/:id: header with status, stat cards, and the tabs Profile | Attendance (F20) | Fees (F21, admin only). */
 export default function StudentDetailPage() {
   const id = Number(useParams().id);
   const validId = Number.isInteger(id) && id > 0;
   const queryClient = useQueryClient();
   const auth = useAuth();
   const isAdmin = auth.hasRole('ADMIN');
-  const canViewFees = isAdmin || auth.hasRole('STUDENT');
+  // Fees are money matters of the office: only an admin sees the Fees tab and amount here (F31).
+  // Teachers see Profile and Attendance; students see their own fees on /my/fees.
+  const canViewFees = isAdmin;
   const [editing, setEditing] = useState(false);
 
   const student = useQuery({
@@ -109,6 +111,8 @@ export default function StudentDetailPage() {
 
   const s = student.data;
   const placement = s.className ? `${s.className}${s.rollNo ? ` · Roll ${s.rollNo}` : ''}` : 'Unassigned';
+  // Three cards for an admin, two (wider) for a teacher.
+  const cardSpan = canViewFees ? 8 : 12;
   const outstandingTotal = fees.data
     ? fees.data
         .filter((inv) => inv.status !== 'CANCELLED')
@@ -146,29 +150,36 @@ export default function StudentDetailPage() {
         }
       />
 
-      {/* Attendance from F20; the fees value comes with F21. */}
+      {/* Attendance from 1 January to today (F20); fees outstanding of non-cancelled invoices (F21), admin only. */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={cardSpan}>
           <StatCard
             label="Attendance this year"
             value={attendance.data ? formatPercent(attendance.data.percentage) : '-'}
             tint={attendance.data?.low ? 'rose' : 'mint'}
           />
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={cardSpan}>
+          {/* Present counts late days too, the same as the student's own dashboard. */}
           <StatCard
             label="Days present / absent"
-            value={attendance.data ? `${attendance.data.present} / ${attendance.data.absent}` : '- / -'}
+            value={
+              attendance.data
+                ? `${attendance.data.present + attendance.data.late} / ${attendance.data.absent}`
+                : '- / -'
+            }
             tint="sky"
           />
         </Col>
-        <Col xs={24} sm={8}>
-          <StatCard
-            label="Fees outstanding"
-            value={canViewFees && outstandingTotal !== undefined ? formatMoney(outstandingTotal) : '-'}
-            tint="peach"
-          />
-        </Col>
+        {canViewFees && (
+          <Col xs={24} sm={cardSpan}>
+            <StatCard
+              label="Fees outstanding"
+              value={outstandingTotal !== undefined ? formatMoney(outstandingTotal) : '-'}
+              tint="peach"
+            />
+          </Col>
+        )}
       </Row>
 
       <Card>
@@ -179,13 +190,15 @@ export default function StudentDetailPage() {
               label: 'Profile',
               children: (
                 <Descriptions column={{ xs: 1, sm: 2 }} size="small">
-                  <Descriptions.Item label="Gender">{humanize(s.gender)}</Descriptions.Item>
+                  <Descriptions.Item label="Gender">{humanize(s.gender) || '-'}</Descriptions.Item>
                   <Descriptions.Item label="Date of birth">{formatDate(s.dateOfBirth)}</Descriptions.Item>
                   <Descriptions.Item label="Email">{s.email || '-'}</Descriptions.Item>
                   <Descriptions.Item label="Phone">{s.phone || '-'}</Descriptions.Item>
                   <Descriptions.Item label="Address">{s.address || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="Guardian">{`${s.guardianName} (${s.guardianRelation})`}</Descriptions.Item>
-                  <Descriptions.Item label="Guardian phone">{s.guardianPhone}</Descriptions.Item>
+                  <Descriptions.Item label="Guardian">
+                    {s.guardianName ? `${s.guardianName}${s.guardianRelation ? ` (${s.guardianRelation})` : ''}` : '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Guardian phone">{s.guardianPhone || '-'}</Descriptions.Item>
                   <Descriptions.Item label="Admission date">{formatDate(s.admissionDate)}</Descriptions.Item>
                   <Descriptions.Item label="Login">
                     {s.username ?? <Text type="secondary">No login</Text>}
